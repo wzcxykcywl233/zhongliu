@@ -1,0 +1,2 @@
+Put the MRIdian .dat image data here.
+

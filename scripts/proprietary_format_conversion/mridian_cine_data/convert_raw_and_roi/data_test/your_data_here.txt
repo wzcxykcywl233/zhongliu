@@ -1,0 +1,1 @@
+Put the MRIdian .raw image data and contour data here.

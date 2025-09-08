@@ -1,0 +1,3 @@
+[submodule "cotracker-algorithm/ext/co-tracker"]
+	path = cotracker-algorithm/ext/co-tracker
+	url = git@github.com:facebookresearch/co-tracker.git

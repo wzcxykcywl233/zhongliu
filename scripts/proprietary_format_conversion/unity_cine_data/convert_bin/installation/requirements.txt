@@ -1,0 +1,11 @@
+ipywidgets==7.6.5
+moviepy==1.0.3
+openpyxl==3.0.10
+SimpleITK==2.1.1
+torchio==0.18.73
+natsort==8.3.1
+timm==0.6.13
+ml-collections==0.1.1
+pystrum==0.2
+torcheval==0.0.7
+
