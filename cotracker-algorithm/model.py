@@ -14,6 +14,8 @@ import numpy as np
 import torch
 
 import resources
+from experiments import get_experiment_config
+from tuning import build_validity_mask, temporal_median_smooth
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,9 @@ def run_algorithm(
     """
 
     # Step 1: Input format conversion ------------------------------------------------
+    experiment_name, config = get_experiment_config()
+    logger.info("CoTracker experiment: %s (%s)", experiment_name, config)
+
     W, H, T = frames.shape
     ORIGINAL_SHAPE = (H, W)  # Store original dimensions for coordinate rescaling
     COTRACKER_SHAPE = (384, 512)
@@ -84,19 +89,43 @@ def run_algorithm(
         )
 
         # extract points from query mask
-        queries = resources.convert_mask_to_points(seg_mask=query, n_border_points=1000)
+        queries = resources.convert_mask_to_points(
+            seg_mask=query,
+            n_border_points=config.border_points,
+        )
 
-        prediction = resources.forward_pass(
+        tracking = resources.forward_pass(
             model=model,
             video=video,
             queries=queries,
+            support_grid_size=config.support_grid_size,
+            n_iterations=config.n_iterations,
+            temporal_stride=config.temporal_stride,
         )
         logger.info("forward pass output:")
-        logger.info(f"\tprediction.shape={prediction.shape}")
+        logger.info(f"\tprediction.shape={tracking.trajectories.shape}")
+
+        trajectories = temporal_median_smooth(
+            tracking.trajectories,
+            config.temporal_median_window,
+        )
+        # Every TrackRAD query is made at t=0. Preserve the exact annotation
+        # after optional temporal filtering.
+        trajectories[:, 0] = queries[:, :, 1:3].to(trajectories.device)
+
+        validity = build_validity_mask(
+            tracking.visibility,
+            tracking.confidence,
+            config.visibility_threshold,
+            config.confidence_threshold,
+        )
 
         prediction = resources.convert_point_trajectory_to_mask_sequence(
-            prediction,
+            trajectories,
             video_shape=COTRACKER_SHAPE,
+            validity=validity,
+            morph_close_kernel=config.morph_close_kernel,
+            keep_largest_component=config.keep_largest_component,
         )  # should now be B, T, C, H, W
         logger.info("after TAP->SEG conversion:")
         logger.info(f"\tprediction.shape={prediction.shape}")
@@ -104,6 +133,9 @@ def run_algorithm(
         # convert back to original shape
         prediction = resources.reshape_video(prediction, target_shape=ORIGINAL_SHAPE)
         assert prediction.shape == (1, T, H, W), f"{prediction.shape} != {(1, T, H, W)}"
+
+        if config.lock_first_mask:
+            prediction[:, 0] = target_tensor[:, 0] > 0.5
 
         # remove batch
         prediction = prediction[0]

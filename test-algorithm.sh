@@ -41,7 +41,7 @@ TRACKRAD_VOLUME=trackrad-volume-$(uuidgen)
 
 # Create a volume for temporary storage of predictions and metrics
 # Remove the volume if it exists
-docker volume rm -f $TRACKRAD_VOLUME > /dev/null
+docker volume rm -f $TRACKRAD_VOLUME > /dev/null 2>&1 || true
 docker volume create $TRACKRAD_VOLUME > /dev/null
 
 echo "=+= Build Algorithm and evaluation containers" 
@@ -56,6 +56,7 @@ docker build "./evaluation" \
   --tag "trackrad-evaluation" 2>&1
 
 echo "=+= Running Algorithm"
+echo "CoTracker experiment: ${COTRACKER_EXPERIMENT:-baseline}"
 
 # Iterate over all cases/subfolders in the dataset
 for case_folder in $DATASET_DIR/*; do
@@ -88,6 +89,7 @@ docker run --rm \
   --platform=linux/amd64 \
   --network none \
   --gpus all \
+  --env COTRACKER_EXPERIMENT="${COTRACKER_EXPERIMENT:-baseline}" \
   --volume "$case_path/frame-rate.json":/input/frame-rate.json:ro \
   --volume "$case_path/b-field-strength.json":/input/b-field-strength.json:ro \
   --volume "$case_path/scanned-region.json":/input/scanned-region.json:ro \
