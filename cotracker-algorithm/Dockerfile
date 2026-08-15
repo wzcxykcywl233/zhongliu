@@ -31,4 +31,7 @@ COPY --chown=user:user . /opt/app/
 
 RUN ~/.pixi/bin/pixi install -e cuda
 
-ENTRYPOINT ["/home/user/.pixi/bin/pixi", "run", "-e", "cuda", "python", "inference.py"]
+# The evaluator starts the container with --network none. Calling `pixi run`
+# here can revalidate local PyPI packages and attempt a network request even
+# though the environment was fully installed during the image build.
+ENTRYPOINT ["/opt/app/.pixi/envs/cuda/bin/python", "inference.py"]
