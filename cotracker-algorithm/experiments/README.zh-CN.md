@@ -76,3 +76,24 @@ python cotracker-algorithm/experiments/run_ablation.py \
 
 CoTracker3 的真实 cine-MRI 伪标签微调建议作为第二阶段开展：先用本轮结果
 确定推理和掩膜重建设置，再固定这些设置比较预训练权重与医学微调权重。
+
+## 单点消融后的组合验证
+
+50 病例公开数据消融表明，`support_grid_0` 是唯一同时改善五项精度指标并
+缩短时间的单点设置；`iterations_2` 提供了均衡的速度收益，
+`keyframe_stride_2` 提供了最强的延迟降低。第二阶段只组合这三个已获得
+单点证据的设置：
+
+| Profile | 组合设置 | 验证目标 |
+|---|---|---|
+| `grid0_iterations2` | 关闭支撑网格 + 2 次迭代 | 精度与速度均衡 |
+| `grid0_stride2` | 关闭支撑网格 + 关键帧步长 2 | 高速追踪与目标上下文优化 |
+| `grid0_iterations2_stride2` | 关闭支撑网格 + 2 次迭代 + 步长 2 | 极致速度候选 |
+
+只运行第二阶段组合验证：
+
+```bash
+python cotracker-algorithm/experiments/run_ablation.py \
+  --dataset-dir ./dataset/trackrad2025_labeled_training_data \
+  --profiles grid0_iterations2 grid0_stride2 grid0_iterations2_stride2
+```

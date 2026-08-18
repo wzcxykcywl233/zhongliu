@@ -1,7 +1,14 @@
 from dataclasses import fields
 import unittest
 
-from experiments import BASELINE, EXPERIMENTS, ExperimentConfig, get_experiment_config
+from experiments import (
+    BASELINE,
+    COMBINATION_EXPERIMENTS,
+    EXPERIMENTS,
+    SINGLE_POINT_EXPERIMENTS,
+    ExperimentConfig,
+    get_experiment_config,
+)
 
 
 class ExperimentTests(unittest.TestCase):
@@ -13,7 +20,7 @@ class ExperimentTests(unittest.TestCase):
 
     def test_each_profile_changes_exactly_one_field(self) -> None:
         names = [field.name for field in fields(ExperimentConfig)]
-        for profile, config in EXPERIMENTS.items():
+        for profile, config in SINGLE_POINT_EXPERIMENTS.items():
             if profile == "baseline":
                 continue
             changed = [
@@ -22,6 +29,32 @@ class ExperimentTests(unittest.TestCase):
                 if getattr(config, name) != getattr(BASELINE, name)
             ]
             self.assertEqual(len(changed), 1, (profile, changed))
+
+    def test_combination_profiles_change_only_supported_fields(self) -> None:
+        expected = {
+            "grid0_iterations2": {"support_grid_size", "n_iterations"},
+            "grid0_stride2": {"support_grid_size", "temporal_stride"},
+            "grid0_iterations2_stride2": {
+                "support_grid_size",
+                "n_iterations",
+                "temporal_stride",
+            },
+        }
+        names = [field.name for field in fields(ExperimentConfig)]
+        self.assertEqual(set(COMBINATION_EXPERIMENTS), set(expected))
+        for profile, config in COMBINATION_EXPERIMENTS.items():
+            changed = {
+                name
+                for name in names
+                if getattr(config, name) != getattr(BASELINE, name)
+            }
+            self.assertEqual(changed, expected[profile], profile)
+
+    def test_all_profiles_are_available(self) -> None:
+        self.assertEqual(
+            set(EXPERIMENTS),
+            set(SINGLE_POINT_EXPERIMENTS) | set(COMBINATION_EXPERIMENTS),
+        )
 
     def test_unknown_profile_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown COTRACKER_EXPERIMENT"):

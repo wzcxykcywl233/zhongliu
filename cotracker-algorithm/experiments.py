@@ -1,8 +1,9 @@
-"""Named, single-variable CoTracker experiments for TrackRAD.
+"""Named CoTracker experiments for TrackRAD.
 
 The default profile intentionally reproduces the original submission.  Every
-other profile changes exactly one inference or mask-reconstruction setting so
-that results can be attributed to that setting in an ablation table.
+single-point profile changes exactly one inference or mask-reconstruction
+setting.  Combination profiles are defined separately and only combine
+settings that were supported by the completed single-point ablation.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ class ExperimentConfig:
 
 BASELINE = ExperimentConfig()
 
-EXPERIMENTS: dict[str, ExperimentConfig] = {
+SINGLE_POINT_EXPERIMENTS: dict[str, ExperimentConfig] = {
     "baseline": BASELINE,
     "points_500": ExperimentConfig(border_points=500),
     "points_1500": ExperimentConfig(border_points=1500),
@@ -64,6 +65,27 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
     "largest_component": ExperimentConfig(keep_largest_component=True),
     "lock_first_mask": ExperimentConfig(lock_first_mask=True),
     "keyframe_stride_2": ExperimentConfig(temporal_stride=2),
+}
+
+COMBINATION_EXPERIMENTS: dict[str, ExperimentConfig] = {
+    "grid0_iterations2": ExperimentConfig(
+        support_grid_size=0,
+        n_iterations=2,
+    ),
+    "grid0_stride2": ExperimentConfig(
+        support_grid_size=0,
+        temporal_stride=2,
+    ),
+    "grid0_iterations2_stride2": ExperimentConfig(
+        support_grid_size=0,
+        n_iterations=2,
+        temporal_stride=2,
+    ),
+}
+
+EXPERIMENTS: dict[str, ExperimentConfig] = {
+    **SINGLE_POINT_EXPERIMENTS,
+    **COMBINATION_EXPERIMENTS,
 }
 
 

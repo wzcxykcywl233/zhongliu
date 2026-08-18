@@ -56,3 +56,25 @@ CoWTracker, PointSt3R, DiT features, and DINOv2 fusion are intentionally not
 mixed into this first matrix: each changes the representation or architecture
 and needs a separate training protocol rather than a controlled inference
 ablation.
+
+## Combination validation after the single-point ablation
+
+The 50-case public-data ablation identified `support_grid_0` as the only
+profile that improved all five accuracy metrics while reducing runtime.
+`iterations_2` provided a balanced speed gain, and `keyframe_stride_2`
+provided the strongest latency reduction.  The following second-stage
+profiles combine only those supported changes:
+
+| Profile | Combined settings | Validation goal |
+|---|---|---|
+| `grid0_iterations2` | No support grid + 2 refinements | Balanced accuracy and speed |
+| `grid0_stride2` | No support grid + stride 2 | Fast tracking with improved target context |
+| `grid0_iterations2_stride2` | No support grid + 2 refinements + stride 2 | Maximum speed candidate |
+
+Run only the second-stage validation:
+
+```bash
+python cotracker-algorithm/experiments/run_ablation.py \
+  --dataset-dir ./dataset/trackrad2025_labeled_training_data \
+  --profiles grid0_iterations2 grid0_stride2 grid0_iterations2_stride2
+```
