@@ -179,8 +179,17 @@ import sys
 
 root = Path(sys.argv[1])
 predictions = []
-for path in sorted((root / "jobs").glob("*/prediction.json")):
+jobs_root = root / "jobs"
+for case_dir in sorted(jobs_root.iterdir()):
+    if not case_dir.is_dir():
+        continue
+    path = case_dir / "prediction.json"
+    complete_marker = case_dir / ".complete"
+    if not path.is_file() or not complete_marker.is_file():
+        continue
     predictions.append(json.loads(path.read_text(encoding="utf-8")))
+if not predictions:
+    raise SystemExit(f"No completed prediction metadata found in {jobs_root}")
 temporary = root / "predictions.json.tmp"
 with temporary.open("w", encoding="utf-8") as handle:
     json.dump(predictions, handle, indent=2)
