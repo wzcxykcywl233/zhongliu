@@ -44,11 +44,22 @@ function Invoke-DockerLogged {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$LogPath
     )
-    & docker @Arguments 2>&1 |
-        Tee-Object -FilePath $LogPath -Append |
-        Tee-Object -FilePath $RunnerLog -Append |
-        ForEach-Object { Write-Host $_ }
-    $ExitCode = $LASTEXITCODE
+    # Windows PowerShell 5 wraps native stderr as ErrorRecord objects. Docker
+    # BuildKit writes ordinary progress to stderr, so temporarily keep those
+    # records non-terminating and decide success exclusively from the process
+    # exit code.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker @Arguments 2>&1 |
+            Tee-Object -FilePath $LogPath -Append |
+            Tee-Object -FilePath $RunnerLog -Append |
+            ForEach-Object { Write-Host $_ }
+        $ExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
     return $ExitCode
 }
 
