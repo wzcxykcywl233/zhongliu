@@ -24,6 +24,12 @@ class ExperimentConfig:
     keep_largest_component: bool = False
     lock_first_mask: bool = False
     temporal_stride: int = 1
+    hierarchical_span: int = 0
+    original_feature_weight: float = 0.0
+    occlusion_merge: bool = False
+    occlusion_visibility_threshold: float = 0.5
+    occlusion_point_fraction: float = 0.5
+    dual_anchor_weight: float = 0.0
 
     def __post_init__(self) -> None:
         if self.border_points < 3:
@@ -46,6 +52,22 @@ class ExperimentConfig:
                 raise ValueError(f"{name} must be a positive odd integer")
         if self.temporal_stride < 1:
             raise ValueError("temporal_stride must be positive")
+        if self.hierarchical_span < 0:
+            raise ValueError("hierarchical_span must be non-negative")
+        for name, value in (
+            ("original_feature_weight", self.original_feature_weight),
+            ("occlusion_visibility_threshold", self.occlusion_visibility_threshold),
+            ("occlusion_point_fraction", self.occlusion_point_fraction),
+            ("dual_anchor_weight", self.dual_anchor_weight),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1]")
+        if self.occlusion_merge and self.hierarchical_span == 0:
+            raise ValueError("occlusion_merge requires hierarchical_span")
+        if self.original_feature_weight > 0 and self.hierarchical_span == 0:
+            raise ValueError("original feature memory requires hierarchical_span")
+        if self.dual_anchor_weight > 0 and self.hierarchical_span == 0:
+            raise ValueError("dual anchor fusion requires hierarchical_span")
 
 
 BASELINE = ExperimentConfig()
@@ -83,9 +105,35 @@ COMBINATION_EXPERIMENTS: dict[str, ExperimentConfig] = {
     ),
 }
 
+
+HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
+    "hierarchical_d10": ExperimentConfig(
+        hierarchical_span=10,
+    ),
+    "hierarchical_d10_original_feat_05": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+    ),
+    "hierarchical_d10_occlusion_merge": ExperimentConfig(
+        hierarchical_span=10,
+        occlusion_merge=True,
+    ),
+    "hierarchical_d10_dual_anchor": ExperimentConfig(
+        hierarchical_span=10,
+        dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
+    **HIERARCHICAL_EXPERIMENTS,
 }
 
 

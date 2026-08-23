@@ -94,14 +94,31 @@ def run_algorithm(
             n_border_points=config.border_points,
         )
 
-        tracking = resources.forward_pass(
-            model=model,
-            video=video,
-            queries=queries,
-            support_grid_size=config.support_grid_size,
-            n_iterations=config.n_iterations,
-            temporal_stride=config.temporal_stride,
-        )
+        if config.hierarchical_span > 0:
+            tracking = resources.hierarchical_forward_pass(
+                model=model,
+                video=video,
+                queries=queries,
+                span=config.hierarchical_span,
+                support_grid_size=config.support_grid_size,
+                n_iterations=config.n_iterations,
+                original_feature_weight=config.original_feature_weight,
+                occlusion_merge=config.occlusion_merge,
+                occlusion_visibility_threshold=(
+                    config.occlusion_visibility_threshold
+                ),
+                occlusion_point_fraction=config.occlusion_point_fraction,
+                dual_anchor_weight=config.dual_anchor_weight,
+            )
+        else:
+            tracking = resources.forward_pass(
+                model=model,
+                video=video,
+                queries=queries,
+                support_grid_size=config.support_grid_size,
+                n_iterations=config.n_iterations,
+                temporal_stride=config.temporal_stride,
+            )
         logger.info("forward pass output:")
         logger.info(f"\tprediction.shape={tracking.trajectories.shape}")
 

@@ -57,6 +57,33 @@ mixed into this first matrix: each changes the representation or architecture
 and needs a separate training protocol rather than a controlled inference
 ablation.
 
+## Hierarchical re-anchoring matrix
+
+These profiles run full CoTracker3 inference inside ten-frame matching levels
+and use each reliable endpoint as the next query anchor:
+
+| Profile | Added mechanism |
+|---|---|
+| `hierarchical_d10` | Position-only re-anchoring every 10 frames |
+| `hierarchical_d10_original_feat_05` | 0.5 immutable original-feature memory |
+| `hierarchical_d10_occlusion_merge` | Merge a persistently occluded level with its neighbors |
+| `hierarchical_d10_dual_anchor` | Reliability-normalized global/local position fusion |
+| `hierarchical_full` | Feature memory + occlusion merge + dual anchor |
+
+The resumable launcher commits each case atomically and appends live logs. Run
+it under `nohup`; launching the same command again after an interruption skips
+completed cases and profiles:
+
+```bash
+nohup bash scripts/run_hierarchical_experiments.sh \
+  /path/to/trackrad2025_labeled_training_data \
+  /path/to/hierarchical-results > hierarchical-launcher.log 2>&1 &
+tail -f /path/to/hierarchical-results/supervisor.log
+```
+
+This matrix uses fixed pretrained weights. Its checkpoint unit is a completed
+case, not an optimizer step.
+
 ## Combination validation after the single-point ablation
 
 The 50-case public-data ablation identified `support_grid_0` as the only

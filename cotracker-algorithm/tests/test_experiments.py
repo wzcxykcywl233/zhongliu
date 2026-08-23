@@ -5,6 +5,7 @@ from experiments import (
     BASELINE,
     COMBINATION_EXPERIMENTS,
     EXPERIMENTS,
+    HIERARCHICAL_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -53,8 +54,37 @@ class ExperimentTests(unittest.TestCase):
     def test_all_profiles_are_available(self) -> None:
         self.assertEqual(
             set(EXPERIMENTS),
-            set(SINGLE_POINT_EXPERIMENTS) | set(COMBINATION_EXPERIMENTS),
+            set(SINGLE_POINT_EXPERIMENTS)
+            | set(COMBINATION_EXPERIMENTS)
+            | set(HIERARCHICAL_EXPERIMENTS),
         )
+
+    def test_hierarchical_profiles_form_the_requested_ablation_series(self) -> None:
+        expected = {
+            "hierarchical_d10": {"hierarchical_span": 10},
+            "hierarchical_d10_original_feat_05": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+            },
+            "hierarchical_d10_occlusion_merge": {
+                "hierarchical_span": 10,
+                "occlusion_merge": True,
+            },
+            "hierarchical_d10_dual_anchor": {
+                "hierarchical_span": 10,
+                "dual_anchor_weight": 0.5,
+            },
+            "hierarchical_full": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+            },
+        }
+        for profile, changes in expected.items():
+            config = HIERARCHICAL_EXPERIMENTS[profile]
+            for name, value in changes.items():
+                self.assertEqual(getattr(config, name), value, (profile, name))
 
     def test_unknown_profile_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown COTRACKER_EXPERIMENT"):

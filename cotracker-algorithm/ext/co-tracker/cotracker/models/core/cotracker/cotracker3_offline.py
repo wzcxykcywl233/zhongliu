@@ -24,6 +24,9 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         is_train=False,
         add_space_attn=True,
         fmaps_chunk_size=200,
+        query_feature_memory=None,
+        query_feature_weight=0.0,
+        return_query_feature_memory=False,
     ):
         """Predict tracks
 
@@ -116,6 +119,19 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             )
             fmaps_pyramid.append(fmaps)
 
+        extracted_track_features = []
+        extracted_support_features = []
+        if query_feature_memory is not None:
+            if len(query_feature_memory) != 2:
+                raise ValueError("query_feature_memory must contain track and support pyramids")
+            if not 0.0 <= query_feature_weight <= 1.0:
+                raise ValueError("query_feature_weight must be in [0, 1]")
+            if (
+                len(query_feature_memory[0]) != self.corr_levels
+                or len(query_feature_memory[1]) != self.corr_levels
+            ):
+                raise ValueError("query feature pyramid has the wrong number of levels")
+
         for i in range(self.corr_levels):
             track_feat, track_feat_support = self.get_track_feat(
                 fmaps_pyramid[i],
@@ -123,6 +139,31 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
                 queried_coords / 2**i,
                 support_radius=self.corr_radius,
             )
+            extracted_track_features.append(track_feat.detach())
+            extracted_support_features.append(track_feat_support.detach())
+            if query_feature_memory is not None and query_feature_weight > 0:
+                original_track_feat = query_feature_memory[0][i].to(
+                    device=track_feat.device,
+                    dtype=track_feat.dtype,
+                )
+                original_support_feat = query_feature_memory[1][i].to(
+                    device=track_feat_support.device,
+                    dtype=track_feat_support.dtype,
+                )
+                if original_track_feat.shape != track_feat.shape:
+                    raise ValueError("track feature memory shape does not match current queries")
+                if original_support_feat.shape != track_feat_support.shape:
+                    raise ValueError("support feature memory shape does not match current queries")
+                track_feat = F.normalize(
+                    query_feature_weight * original_track_feat
+                    + (1.0 - query_feature_weight) * track_feat,
+                    dim=-1,
+                )
+                track_feat_support = F.normalize(
+                    query_feature_weight * original_support_feat
+                    + (1.0 - query_feature_weight) * track_feat_support,
+                    dim=-1,
+                )
             track_feat_pyramid.append(track_feat.repeat(1, T, 1, 1))
             track_feat_support_pyramid.append(track_feat_support.unsqueeze(1))
 
@@ -230,4 +271,12 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         else:
             train_data = None
 
-        return coord_preds[-1][..., :2], vis_preds[-1], confidence_preds[-1], train_data
+        result = (
+            coord_preds[-1][..., :2],
+            vis_preds[-1],
+            confidence_preds[-1],
+            train_data,
+        )
+        if return_query_feature_memory:
+            return result + ((extracted_track_features, extracted_support_features),)
+        return result

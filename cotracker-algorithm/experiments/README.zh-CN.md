@@ -77,6 +77,48 @@ python cotracker-algorithm/experiments/run_ablation.py \
 CoTracker3 的真实 cine-MRI 伪标签微调建议作为第二阶段开展：先用本轮结果
 确定推理和掩膜重建设置，再固定这些设置比较预训练权重与医学微调权重。
 
+## 遮挡感知的分段重锚定实验
+
+该系列把完整序列拆成跨度为 10 帧的匹配级。每一级仍运行完整 CoTracker3，
+但以上一级末帧的位置作为下一级查询，从而减小单次匹配位移。原始特征记忆
+实验始终保留第一帧查询特征，并与新锚点特征按 0.5/0.5 加权后重新归一化。
+双锚点实验同时计算原始查询分支和短跨度分支，再使用可见性乘置信度作为
+可靠性，对两个位置预测进行归一化融合。
+
+| Profile | 设置 |
+|---|---|
+| `hierarchical_d10` | 10 帧匹配级，只进行位置重锚定 |
+| `hierarchical_d10_original_feat_05` | 增加 0.5 原始特征记忆 |
+| `hierarchical_d10_occlusion_merge` | 增加持续遮挡匹配级合并 |
+| `hierarchical_d10_dual_anchor` | 增加原始/局部双位置分支融合 |
+| `hierarchical_full` | 同时启用特征记忆、遮挡合并和双锚点融合 |
+
+遮挡合并默认要求至少 50% 的边界点在整个匹配级内可见性均低于 0.5。
+触发后，当前级与前后相邻级合并，并从合并区间之前保存的查询锚点重新运行。
+
+远程运行时推荐使用可恢复启动器：
+
+```bash
+cd /mnt/c/zhongliu/zhongliu-tuning
+nohup bash scripts/run_hierarchical_experiments.sh \
+  /mnt/c/zhongliu/trackrad2025-main/dataset/trackrad2025_labeled_training_data \
+  /mnt/c/zhongliu/zhongliu-tuning/hierarchical-results \
+  > /mnt/c/zhongliu/zhongliu-tuning/hierarchical-launcher.log 2>&1 &
+```
+
+实时查看总日志：
+
+```bash
+tail -f /mnt/c/zhongliu/zhongliu-tuning/hierarchical-results/supervisor.log
+```
+
+每个病例仅在预测文件和元数据完整写入后才原子提交到
+`<输出目录>/<profile>/checkpoint/jobs/<case_id>`。断电后重新执行同一条启动
+命令即可：已完成病例和 profile 会自动跳过，未提交的当前病例会重新运行。
+`console.log`、`case.log`、`summary.json` 和每个 profile 的 `metrics.json` 均会
+持续保留。这里运行的是固定权重推理评测，不包含优化器训练状态；因此恢复
+粒度是病例，而不是训练 step。
+
 ## 单点消融后的组合验证
 
 50 病例公开数据消融表明，`support_grid_0` 是唯一同时改善五项精度指标并
