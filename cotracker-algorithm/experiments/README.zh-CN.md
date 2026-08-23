@@ -93,6 +93,30 @@ CoTracker3 的真实 cine-MRI 伪标签微调建议作为第二阶段开展：�
 | `hierarchical_d10_dual_anchor` | 增加原始/局部双位置分支融合 |
 | `hierarchical_full` | 同时启用特征记忆、遮挡合并和双锚点融合 |
 
+首轮 50 病例结果表明，0.5 原始特征记忆取得最高 DSC 和 Relative D98，完整
+方案则同时改善基线的全部五项精度指标。后续局部搜索固定其余设置，只改变
+一个研究变量：
+
+| Profile | 相对参照 | 唯一研究变量 | 验证目标 |
+|---|---|---|---|
+| `hierarchical_d10_original_feat_025` | `hierarchical_d10_original_feat_05` | 原始特征权重 0.25 | 检查较弱身份记忆是否降低边界误差 |
+| `hierarchical_d10_original_feat_075` | `hierarchical_d10_original_feat_05` | 原始特征权重 0.75 | 检查更强身份记忆能否继续提高 DSC/D98 |
+| `hierarchical_full_d5` | `hierarchical_full` | 完整方案跨度 5 | 检查更频繁重锚定的精度—耗时变化 |
+| `hierarchical_full_d15` | `hierarchical_full` | 完整方案跨度 15 | 检查较长局部匹配能否减少累计漂移和计算量 |
+
+在远程 Windows PowerShell 中运行后续四组实验：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\zhongliu\zhongliu-tuning\scripts\run_hierarchical_followup_resumable.ps1"
+```
+
+默认结果目录为 `C:\zhongliu\zhongliu-tuning\hierarchical-followup-results`。
+运行器直接通过 Windows Docker 客户端逐病例执行，持续写入 `runner.log` 和
+每个病例的 `case.log`。只有输出、元数据和完成标记均写入后，病例目录才会
+提交到 `checkpoint\jobs`。断电后重新执行同一命令即可跳过完整病例；已生成
+`metrics.json` 的整个 profile 也会直接跳过。
+
 遮挡合并默认要求至少 50% 的边界点在整个匹配级内可见性均低于 0.5。
 触发后，当前级与前后相邻级合并，并从合并区间之前保存的查询锚点重新运行。
 

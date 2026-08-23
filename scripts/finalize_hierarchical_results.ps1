@@ -1,18 +1,17 @@
 param(
     [string]$Repository = "C:\zhongliu\zhongliu-tuning",
     [string]$Dataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_training_data",
-    [string]$Results = "C:\zhongliu\zhongliu-tuning\hierarchical-results"
+    [string]$Results = "C:\zhongliu\zhongliu-tuning\hierarchical-results",
+    [string[]]$Profiles = @(
+        "hierarchical_d10",
+        "hierarchical_d10_original_feat_05",
+        "hierarchical_d10_occlusion_merge",
+        "hierarchical_d10_dual_anchor",
+        "hierarchical_full"
+    )
 )
 
 $ErrorActionPreference = "Stop"
-
-$Profiles = @(
-    "hierarchical_d10",
-    "hierarchical_d10_original_feat_05",
-    "hierarchical_d10_occlusion_merge",
-    "hierarchical_d10_dual_anchor",
-    "hierarchical_full"
-)
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $SummaryPath = Join-Path $Results "summary.json"

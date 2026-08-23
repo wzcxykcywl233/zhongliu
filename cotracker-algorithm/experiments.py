@@ -128,6 +128,26 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         occlusion_merge=True,
         dual_anchor_weight=0.5,
     ),
+    "hierarchical_d10_original_feat_025": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.25,
+    ),
+    "hierarchical_d10_original_feat_075": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.75,
+    ),
+    "hierarchical_full_d5": ExperimentConfig(
+        hierarchical_span=5,
+        original_feature_weight=0.5,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full_d15": ExperimentConfig(
+        hierarchical_span=15,
+        original_feature_weight=0.5,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
 }
 
 EXPERIMENTS: dict[str, ExperimentConfig] = {

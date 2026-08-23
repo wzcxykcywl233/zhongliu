@@ -80,7 +80,28 @@ class ExperimentTests(unittest.TestCase):
                 "occlusion_merge": True,
                 "dual_anchor_weight": 0.5,
             },
+            "hierarchical_d10_original_feat_025": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.25,
+            },
+            "hierarchical_d10_original_feat_075": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.75,
+            },
+            "hierarchical_full_d5": {
+                "hierarchical_span": 5,
+                "original_feature_weight": 0.5,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+            },
+            "hierarchical_full_d15": {
+                "hierarchical_span": 15,
+                "original_feature_weight": 0.5,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+            },
         }
+        self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         for profile, changes in expected.items():
             config = HIERARCHICAL_EXPERIMENTS[profile]
             for name, value in changes.items():
