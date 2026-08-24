@@ -109,6 +109,9 @@ def run_algorithm(
                 ),
                 occlusion_point_fraction=config.occlusion_point_fraction,
                 dual_anchor_weight=config.dual_anchor_weight,
+                feature_gate_distance=config.feature_gate_distance,
+                feature_similarity_threshold=config.feature_similarity_threshold,
+                feature_revalidate_radius=config.feature_revalidate_radius,
             )
         else:
             tracking = resources.forward_pass(

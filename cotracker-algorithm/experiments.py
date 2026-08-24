@@ -30,6 +30,9 @@ class ExperimentConfig:
     occlusion_visibility_threshold: float = 0.5
     occlusion_point_fraction: float = 0.5
     dual_anchor_weight: float = 0.0
+    feature_gate_distance: float = 0.0
+    feature_similarity_threshold: float = 0.5
+    feature_revalidate_radius: int = 0
 
     def __post_init__(self) -> None:
         if self.border_points < 3:
@@ -54,6 +57,12 @@ class ExperimentConfig:
             raise ValueError("temporal_stride must be positive")
         if self.hierarchical_span < 0:
             raise ValueError("hierarchical_span must be non-negative")
+        if self.feature_gate_distance < 0:
+            raise ValueError("feature_gate_distance must be non-negative")
+        if not -1.0 <= self.feature_similarity_threshold <= 1.0:
+            raise ValueError("feature_similarity_threshold must be in [-1, 1]")
+        if self.feature_revalidate_radius < 0:
+            raise ValueError("feature_revalidate_radius must be non-negative")
         for name, value in (
             ("original_feature_weight", self.original_feature_weight),
             ("occlusion_visibility_threshold", self.occlusion_visibility_threshold),
@@ -68,6 +77,12 @@ class ExperimentConfig:
             raise ValueError("original feature memory requires hierarchical_span")
         if self.dual_anchor_weight > 0 and self.hierarchical_span == 0:
             raise ValueError("dual anchor fusion requires hierarchical_span")
+        if self.feature_gate_distance > 0 and self.dual_anchor_weight == 0:
+            raise ValueError("feature gating requires dual anchor fusion")
+        if self.feature_gate_distance > 0 and self.original_feature_weight == 0:
+            raise ValueError("feature gating requires original feature memory")
+        if self.feature_revalidate_radius > 0 and self.feature_gate_distance == 0:
+            raise ValueError("feature revalidation requires feature gating")
 
 
 BASELINE = ExperimentConfig()
@@ -147,6 +162,22 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         original_feature_weight=0.5,
         occlusion_merge=True,
         dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full_feature_gate": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        feature_gate_distance=4.0,
+    ),
+    "hierarchical_full_feature_revalidate_r4": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        feature_gate_distance=4.0,
+        feature_similarity_threshold=0.5,
+        feature_revalidate_radius=4,
     ),
 }
 

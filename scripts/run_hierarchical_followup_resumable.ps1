@@ -1,17 +1,16 @@
 param(
     [string]$Repository = "C:\zhongliu\zhongliu-tuning",
     [string]$Dataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_training_data",
-    [string]$Results = "C:\zhongliu\zhongliu-tuning\hierarchical-followup-results"
+    [string]$Results = "C:\zhongliu\zhongliu-tuning\hierarchical-followup-results",
+    [string[]]$Profiles = @(
+        "hierarchical_d10_original_feat_025",
+        "hierarchical_d10_original_feat_075",
+        "hierarchical_full_d5",
+        "hierarchical_full_d15"
+    )
 )
 
 $ErrorActionPreference = "Stop"
-
-$Profiles = @(
-    "hierarchical_d10_original_feat_025",
-    "hierarchical_d10_original_feat_075",
-    "hierarchical_full_d5",
-    "hierarchical_full_d15"
-)
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $AlgorithmDir = Join-Path $Repository "cotracker-algorithm"

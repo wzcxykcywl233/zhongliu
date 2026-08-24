@@ -117,6 +117,33 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 提交到 `checkpoint\jobs`。断电后重新执行同一命令即可跳过完整病例；已生成
 `metrics.json` 的整个 profile 也会直接跳过。
 
+## 双分支融合后的特征重校验
+
+完整方案原本对全局原始锚点分支和局部重锚定分支做可靠性加权坐标融合，
+但融合坐标本身未经过目标帧特征检查。新增两组推理期实验复用局部分支已经
+计算的 CoTracker level-0 特征图，不重复运行图像编码器：
+
+| Profile | 单点新增机制 | 默认阈值 |
+|---|---|---|
+| `hierarchical_full_feature_gate` | 两分支距离过大时，对两个候选点做特征重评分并选择更可靠分支 | 分歧距离 4 像素 |
+| `hierarchical_full_feature_revalidate_r4` | 特征门控后，若两候选均不相似，则在选中点周围搜索更相似位置 | 余弦相似度 0.5、半径 4 像素 |
+
+门控候选质量由原始/当前查询融合特征的余弦相似度与该分支的
+`visibility × confidence` 相乘得到。距离不超过阈值时保留原来的连续加权
+融合；距离超过阈值时才改为二选一。邻域搜索只作用于两个候选相似度都低于
+阈值的位置，并加入小幅距离惩罚，避免为了相近的特征分数产生不必要跳点。
+
+远程 Windows PowerShell 运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\zhongliu\zhongliu-tuning\scripts\run_hierarchical_revalidation_resumable.ps1"
+```
+
+默认结果目录为
+`C:\zhongliu\zhongliu-tuning\hierarchical-revalidation-results`，同样支持逐病例
+断点恢复、实时 `runner.log` 和完成 profile 自动跳过。
+
 遮挡合并默认要求至少 50% 的边界点在整个匹配级内可见性均低于 0.5。
 触发后，当前级与前后相邻级合并，并从合并区间之前保存的查询锚点重新运行。
 

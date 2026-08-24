@@ -120,8 +120,9 @@ def _run_single_clip(
     query_feature_memory: QueryFeatureMemory | None = None,
     query_feature_weight: float = 0.0,
     return_query_feature_memory: bool = False,
+    return_frame_features: bool = False,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-) -> tuple[TrackingResult, QueryFeatureMemory | None]:
+) -> tuple[TrackingResult, QueryFeatureMemory | None, torch.Tensor | None]:
     """
     Performs a single forward pass of provided batched samples through the model.
     Requires TAP data.
@@ -169,6 +170,8 @@ def _run_single_clip(
         model_kwargs["query_feature_weight"] = query_feature_weight
     if return_query_feature_memory:
         model_kwargs["return_query_feature_memory"] = True
+    if return_frame_features:
+        model_kwargs["return_frame_features"] = True
     out = model(**model_kwargs)
 
     # Always use original_N to ensure consistent shapes with ground truth
@@ -198,11 +201,21 @@ def _run_single_clip(
             pred_trajectory[b, frame_idx, n, :2] = boundary_queries[b, n, 1:3]
 
     memory = None
+    extra_index = 4
     if return_query_feature_memory:
-        raw_memory = out[4]
+        raw_memory = out[extra_index]
         memory = QueryFeatureMemory(tuple(raw_memory[0]), tuple(raw_memory[1]))
+        extra_index += 1
 
-    return TrackingResult(pred_trajectory, pred_visibility, pred_confidence), memory
+    frame_features = None
+    if return_frame_features:
+        frame_features = out[extra_index]
+
+    return (
+        TrackingResult(pred_trajectory, pred_visibility, pred_confidence),
+        memory,
+        frame_features,
+    )
 
 
 def forward_pass(
@@ -215,7 +228,7 @@ def forward_pass(
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> TrackingResult:
     """Run the original full-span CoTracker inference path."""
-    result, _ = _run_single_clip(
+    result, _, _ = _run_single_clip(
         model=model,
         video=video,
         queries=queries,
@@ -270,6 +283,169 @@ def fuse_tracking_results(
     return TrackingResult(fused_trajectories, fused_visibility, fused_confidence)
 
 
+def sample_trajectory_features(
+    model: CoTrackerThreeOffline,
+    frame_features: torch.Tensor,
+    trajectories: torch.Tensor,
+) -> torch.Tensor:
+    """Sample normalized level-zero CoTracker features at per-frame positions."""
+    batch, frames, points, _ = trajectories.shape
+    queried_frames = (
+        torch.arange(frames, device=trajectories.device)
+        .view(1, frames, 1)
+        .expand(batch, frames, points)
+        .reshape(batch, frames * points)
+    )
+    queried_coords = trajectories.reshape(batch, frames * points, 2) / model.stride
+    sampled, _ = model.get_track_feat(
+        frame_features,
+        queried_frames,
+        queried_coords,
+        support_radius=0,
+    )
+    return torch.nn.functional.normalize(
+        sampled[:, 0].reshape(batch, frames, points, -1),
+        dim=-1,
+    )
+
+
+def build_validation_reference(
+    original_memory: QueryFeatureMemory,
+    current_memory: QueryFeatureMemory,
+    point_count: int,
+    original_weight: float,
+) -> torch.Tensor:
+    """Build the same original/current identity feature used by local tracking."""
+    original = original_memory.track[0]
+    current = current_memory.track[0]
+    if original.ndim == 4:
+        original = original[:, 0]
+    if current.ndim == 4:
+        current = current[:, 0]
+    original = original[:, :point_count]
+    current = current[:, :point_count]
+    return torch.nn.functional.normalize(
+        original_weight * original + (1.0 - original_weight) * current,
+        dim=-1,
+    )
+
+
+def feature_gate_tracking_results(
+    local: TrackingResult,
+    global_result: TrackingResult,
+    local_similarity: torch.Tensor,
+    global_similarity: torch.Tensor,
+    global_weight: float,
+    distance_threshold: float,
+) -> tuple[TrackingResult, torch.Tensor, torch.Tensor]:
+    """Use appearance reliability to select a branch when positions disagree."""
+    if distance_threshold <= 0:
+        raise ValueError("distance_threshold must be positive")
+    fused = fuse_tracking_results(local, global_result, global_weight)
+    disagreement = torch.linalg.vector_norm(
+        local.trajectories - global_result.trajectories,
+        dim=-1,
+    )
+    gate_mask = disagreement > distance_threshold
+    gate_mask[:, 0] = False
+
+    local_reliability = local.visibility * local.confidence
+    global_reliability = global_result.visibility * global_result.confidence
+    local_quality = (
+        (1.0 - global_weight)
+        * local_reliability
+        * ((local_similarity + 1.0) * 0.5).clamp(0.0, 1.0)
+    )
+    global_quality = (
+        global_weight
+        * global_reliability
+        * ((global_similarity + 1.0) * 0.5).clamp(0.0, 1.0)
+    )
+    choose_global = global_quality > local_quality
+    selected_trajectories = torch.where(
+        choose_global[..., None],
+        global_result.trajectories,
+        local.trajectories,
+    )
+    selected_visibility = torch.where(
+        choose_global, global_result.visibility, local.visibility
+    )
+    selected_confidence = torch.where(
+        choose_global, global_result.confidence, local.confidence
+    )
+    selected_similarity = torch.where(
+        choose_global, global_similarity, local_similarity
+    )
+
+    trajectories = torch.where(
+        gate_mask[..., None], selected_trajectories, fused.trajectories
+    )
+    visibility = torch.where(gate_mask, selected_visibility, fused.visibility)
+    confidence = torch.where(gate_mask, selected_confidence, fused.confidence)
+    trajectories[:, 0] = local.trajectories[:, 0]
+    return (
+        TrackingResult(trajectories, visibility, confidence),
+        gate_mask,
+        selected_similarity,
+    )
+
+
+def revalidate_in_feature_neighborhood(
+    model: CoTrackerThreeOffline,
+    frame_features: torch.Tensor,
+    result: TrackingResult,
+    reference_features: torch.Tensor,
+    revalidate_mask: torch.Tensor,
+    radius: int,
+    image_shape: tuple[int, int],
+) -> tuple[TrackingResult, torch.Tensor]:
+    """Search a bounded image-space neighborhood for a better feature match."""
+    if radius < 1:
+        raise ValueError("radius must be positive")
+    height, width = image_shape
+    base_trajectories = result.trajectories
+    trajectories = base_trajectories.clone()
+    reference = reference_features[:, None]
+    best_features = sample_trajectory_features(
+        model, frame_features, base_trajectories
+    )
+    best_score = (best_features * reference).sum(dim=-1)
+    corrected = torch.zeros_like(revalidate_mask)
+
+    for offset_y in range(-radius, radius + 1):
+        for offset_x in range(-radius, radius + 1):
+            if offset_x == 0 and offset_y == 0:
+                continue
+            squared_distance = offset_x * offset_x + offset_y * offset_y
+            if squared_distance > radius * radius:
+                continue
+            candidate = base_trajectories.clone()
+            candidate[..., 0] = (candidate[..., 0] + offset_x).clamp(0, width - 1)
+            candidate[..., 1] = (candidate[..., 1] + offset_y).clamp(0, height - 1)
+            candidate_features = sample_trajectory_features(
+                model, frame_features, candidate
+            )
+            candidate_score = (candidate_features * reference).sum(dim=-1)
+            # A small motion prior avoids moving to an equally similar but more
+            # distant pixel. Feature evidence still dominates within radius 4.
+            candidate_score = candidate_score - 0.01 * (
+                squared_distance / float(radius * radius)
+            )
+            improve = revalidate_mask & (candidate_score > best_score)
+            trajectories = torch.where(
+                improve[..., None], candidate, trajectories
+            )
+            best_score = torch.where(improve, candidate_score, best_score)
+            corrected |= improve
+
+    trajectories[:, 0] = result.trajectories[:, 0]
+    corrected[:, 0] = False
+    return (
+        TrackingResult(trajectories, result.visibility, result.confidence),
+        corrected,
+    )
+
+
 def segment_is_occluded(
     visibility: torch.Tensor,
     threshold: float,
@@ -297,11 +473,26 @@ def hierarchical_forward_pass(
     occlusion_visibility_threshold: float = 0.5,
     occlusion_point_fraction: float = 0.5,
     dual_anchor_weight: float = 0.0,
+    feature_gate_distance: float = 0.0,
+    feature_similarity_threshold: float = 0.5,
+    feature_revalidate_radius: int = 0,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> TrackingResult:
     """Track short levels, re-anchor at endpoints, and optionally merge occlusions."""
     if span < 1:
         raise ValueError("span must be positive")
+    if feature_gate_distance < 0:
+        raise ValueError("feature_gate_distance must be non-negative")
+    if not -1.0 <= feature_similarity_threshold <= 1.0:
+        raise ValueError("feature_similarity_threshold must be in [-1, 1]")
+    if feature_revalidate_radius < 0:
+        raise ValueError("feature_revalidate_radius must be non-negative")
+    if feature_gate_distance > 0 and dual_anchor_weight <= 0:
+        raise ValueError("feature gating requires dual anchor tracking")
+    if feature_gate_distance > 0 and original_feature_weight <= 0:
+        raise ValueError("feature gating requires original feature memory")
+    if feature_revalidate_radius > 0 and feature_gate_distance <= 0:
+        raise ValueError("feature revalidation requires feature gating")
     if video.ndim != 5 or queries.ndim != 3:
         raise ValueError("unexpected video or query shape")
 
@@ -311,7 +502,7 @@ def hierarchical_forward_pass(
     batch, total_frames = video.shape[:2]
     point_count = queries.shape[1]
     if total_frames == 1:
-        result, _ = _run_single_clip(
+        result, _, _ = _run_single_clip(
             model,
             video,
             queries,
@@ -347,11 +538,16 @@ def hierarchical_forward_pass(
     previous_queries = None
     start = 0
     level = 0
+    validation_enabled = feature_gate_distance > 0
 
     def run_level(level_start, level_end, level_queries):
         nonlocal original_memory
-        capture_memory = original_feature_weight > 0 and original_memory is None
-        result, captured = _run_single_clip(
+        capture_memory = (
+            (original_feature_weight > 0 or validation_enabled)
+            and original_memory is None
+        )
+        return_memory = capture_memory or validation_enabled
+        result, captured, frame_features = _run_single_clip(
             model,
             video[:, level_start : level_end + 1],
             level_queries,
@@ -359,10 +555,12 @@ def hierarchical_forward_pass(
             n_iterations=n_iterations,
             query_feature_memory=original_memory,
             query_feature_weight=original_feature_weight,
-            return_query_feature_memory=capture_memory,
+            return_query_feature_memory=return_memory,
+            return_frame_features=validation_enabled,
             device=device,
         )
-        if captured is not None:
+        current_memory = captured
+        if captured is not None and original_memory is None:
             original_memory = captured
         if global_result is not None:
             global_slice = TrackingResult(
@@ -370,7 +568,61 @@ def hierarchical_forward_pass(
                 global_result.visibility[:, level_start : level_end + 1],
                 global_result.confidence[:, level_start : level_end + 1],
             )
-            result = fuse_tracking_results(result, global_slice, dual_anchor_weight)
+            if validation_enabled:
+                if current_memory is None or original_memory is None:
+                    raise RuntimeError("feature validation memory was not returned")
+                if frame_features is None:
+                    raise RuntimeError("frame features were not returned")
+                reference = build_validation_reference(
+                    original_memory,
+                    current_memory,
+                    point_count,
+                    original_feature_weight,
+                )
+                local_features = sample_trajectory_features(
+                    model, frame_features, result.trajectories
+                )
+                global_features = sample_trajectory_features(
+                    model, frame_features, global_slice.trajectories
+                )
+                local_similarity = (local_features * reference[:, None]).sum(dim=-1)
+                global_similarity = (
+                    global_features * reference[:, None]
+                ).sum(dim=-1)
+                result, gate_mask, selected_similarity = feature_gate_tracking_results(
+                    result,
+                    global_slice,
+                    local_similarity,
+                    global_similarity,
+                    dual_anchor_weight,
+                    feature_gate_distance,
+                )
+                logger.info(
+                    "Feature gate selected one branch for %d point-frames",
+                    int(gate_mask.sum().item()),
+                )
+                if feature_revalidate_radius > 0:
+                    revalidate_mask = gate_mask & (
+                        torch.maximum(local_similarity, global_similarity)
+                        < feature_similarity_threshold
+                    )
+                    result, corrected = revalidate_in_feature_neighborhood(
+                        model,
+                        frame_features,
+                        result,
+                        reference,
+                        revalidate_mask,
+                        feature_revalidate_radius,
+                        tuple(video.shape[-2:]),
+                    )
+                    logger.info(
+                        "Feature neighborhood corrected %d point-frames",
+                        int(corrected.sum().item()),
+                    )
+            else:
+                result = fuse_tracking_results(
+                    result, global_slice, dual_anchor_weight
+                )
         return result
 
     def store_level(level_start, level_end, result):

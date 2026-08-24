@@ -27,6 +27,7 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         query_feature_memory=None,
         query_feature_weight=0.0,
         return_query_feature_memory=False,
+        return_frame_features=False,
     ):
         """Predict tracks
 
@@ -277,6 +278,12 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             confidence_preds[-1],
             train_data,
         )
+        extras = []
         if return_query_feature_memory:
-            return result + ((extracted_track_features, extracted_support_features),)
-        return result
+            extras.append((extracted_track_features, extracted_support_features))
+        if return_frame_features:
+            # Level zero is already L2-normalized and has the highest spatial
+            # resolution. Returning it avoids a second encoder pass during
+            # post-fusion appearance validation.
+            extras.append(fmaps_pyramid[0].detach())
+        return result + tuple(extras)

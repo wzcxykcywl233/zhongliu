@@ -100,6 +100,22 @@ class ExperimentTests(unittest.TestCase):
                 "occlusion_merge": True,
                 "dual_anchor_weight": 0.5,
             },
+            "hierarchical_full_feature_gate": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "feature_gate_distance": 4.0,
+            },
+            "hierarchical_full_feature_revalidate_r4": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "feature_gate_distance": 4.0,
+                "feature_similarity_threshold": 0.5,
+                "feature_revalidate_radius": 4,
+            },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         for profile, changes in expected.items():
@@ -110,6 +126,21 @@ class ExperimentTests(unittest.TestCase):
     def test_unknown_profile_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown COTRACKER_EXPERIMENT"):
             get_experiment_config("does-not-exist")
+
+    def test_feature_revalidation_requires_gate_and_dual_anchor(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires dual anchor"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                original_feature_weight=0.5,
+                feature_gate_distance=4.0,
+            )
+        with self.assertRaisesRegex(ValueError, "requires feature gating"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                original_feature_weight=0.5,
+                dual_anchor_weight=0.5,
+                feature_revalidate_radius=4,
+            )
 
 
 if __name__ == "__main__":

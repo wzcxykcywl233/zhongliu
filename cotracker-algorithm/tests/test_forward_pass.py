@@ -163,6 +163,52 @@ class ForwardPassTests(unittest.TestCase):
         self.assertEqual([call["frames"] for call in model.calls], [3, 3, 7])
         self.assertTrue(torch.all(result.visibility == 1.0))
 
+    def test_feature_gate_selects_appearance_consistent_branch_when_far(self) -> None:
+        local = resource_model.TrackingResult(
+            trajectories=torch.tensor([[[[0.0, 0.0]], [[0.0, 0.0]]]]),
+            visibility=torch.ones((1, 2, 1)),
+            confidence=torch.ones((1, 2, 1)),
+        )
+        global_result = resource_model.TrackingResult(
+            trajectories=torch.tensor([[[[0.0, 0.0]], [[10.0, 0.0]]]]),
+            visibility=torch.ones((1, 2, 1)),
+            confidence=torch.ones((1, 2, 1)),
+        )
+        result, gate_mask, similarity = resource_model.feature_gate_tracking_results(
+            local,
+            global_result,
+            local_similarity=torch.tensor([[[0.2], [0.2]]]),
+            global_similarity=torch.tensor([[[0.9], [0.9]]]),
+            global_weight=0.5,
+            distance_threshold=4.0,
+        )
+        self.assertFalse(bool(gate_mask[0, 0, 0]))
+        self.assertTrue(bool(gate_mask[0, 1, 0]))
+        self.assertEqual(float(result.trajectories[0, 1, 0, 0]), 10.0)
+        self.assertAlmostEqual(float(similarity[0, 1, 0]), 0.9, places=5)
+
+    def test_feature_gate_keeps_weighted_fusion_when_branches_are_close(self) -> None:
+        local = resource_model.TrackingResult(
+            trajectories=torch.tensor([[[[0.0, 0.0]], [[0.0, 0.0]]]]),
+            visibility=torch.ones((1, 2, 1)),
+            confidence=torch.ones((1, 2, 1)),
+        )
+        global_result = resource_model.TrackingResult(
+            trajectories=torch.tensor([[[[0.0, 0.0]], [[2.0, 0.0]]]]),
+            visibility=torch.ones((1, 2, 1)),
+            confidence=torch.ones((1, 2, 1)),
+        )
+        result, gate_mask, _ = resource_model.feature_gate_tracking_results(
+            local,
+            global_result,
+            local_similarity=torch.ones((1, 2, 1)),
+            global_similarity=torch.ones((1, 2, 1)),
+            global_weight=0.5,
+            distance_threshold=4.0,
+        )
+        self.assertFalse(bool(gate_mask.any()))
+        self.assertEqual(float(result.trajectories[0, 1, 0, 0]), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
