@@ -181,10 +181,18 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
     ),
 }
 
+# Audit-only duplicate of the baseline.  Comparing its per-case output hash with
+# ``baseline`` detects nondeterministic inference before tiny ablation deltas are
+# interpreted as real effects.
+AUDIT_EXPERIMENTS: dict[str, ExperimentConfig] = {
+    "baseline_repeat": BASELINE,
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
     **HIERARCHICAL_EXPERIMENTS,
+    **AUDIT_EXPERIMENTS,
 }
 
 

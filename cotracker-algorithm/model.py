@@ -9,7 +9,11 @@ Returns:
 - numpy.ndarray: A 3D numpy array of shape (W, H, T) containing the predicted target masks per frame.
 """
 
+from dataclasses import asdict
+import hashlib
+import json
 import logging
+import os
 import numpy as np
 import torch
 
@@ -18,6 +22,8 @@ from experiments import get_experiment_config
 from tuning import build_validity_mask, temporal_median_smooth
 
 logger = logging.getLogger(__name__)
+
+DIAGNOSTIC_PREFIX = "TRACKRAD_DIAGNOSTICS_JSON="
 
 
 def run_algorithm(
@@ -40,6 +46,20 @@ def run_algorithm(
 
     # Step 1: Input format conversion ------------------------------------------------
     experiment_name, config = get_experiment_config()
+    diagnostics_enabled = os.environ.get("TRACKRAD_DIAGNOSTICS", "0") == "1"
+    diagnostics: dict[str, object] | None = None
+    numeric_diagnostics: dict[str, int | float] | None = None
+    if diagnostics_enabled:
+        config_dict = asdict(config)
+        config_json = json.dumps(config_dict, sort_keys=True, separators=(",", ":"))
+        numeric_diagnostics = {}
+        diagnostics = {
+            "schema_version": 1,
+            "profile": experiment_name,
+            "config": config_dict,
+            "config_sha256": hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+            "mechanism": numeric_diagnostics,
+        }
     logger.info("CoTracker experiment: %s (%s)", experiment_name, config)
 
     W, H, T = frames.shape
@@ -93,6 +113,12 @@ def run_algorithm(
             seg_mask=query,
             n_border_points=config.border_points,
         )
+        if numeric_diagnostics is not None:
+            numeric_diagnostics["query_points"] = int(queries.shape[1])
+            numeric_diagnostics["input_frames"] = int(T)
+            numeric_diagnostics["support_grid_size"] = config.support_grid_size
+            numeric_diagnostics["n_iterations"] = config.n_iterations
+            numeric_diagnostics["temporal_stride"] = config.temporal_stride
 
         if config.hierarchical_span > 0:
             tracking = resources.hierarchical_forward_pass(
@@ -112,6 +138,7 @@ def run_algorithm(
                 feature_gate_distance=config.feature_gate_distance,
                 feature_similarity_threshold=config.feature_similarity_threshold,
                 feature_revalidate_radius=config.feature_revalidate_radius,
+                diagnostics=numeric_diagnostics,
             )
         else:
             tracking = resources.forward_pass(
@@ -129,6 +156,23 @@ def run_algorithm(
             tracking.trajectories,
             config.temporal_median_window,
         )
+        if numeric_diagnostics is not None:
+            smoothing_distance = torch.linalg.vector_norm(
+                trajectories - tracking.trajectories,
+                dim=-1,
+            )
+            changed = smoothing_distance > 1e-6
+            numeric_diagnostics["temporal_median_changed_point_frames"] = int(
+                changed.sum().item()
+            )
+            numeric_diagnostics["temporal_median_distance_sum"] = float(
+                smoothing_distance[changed].sum().item()
+            )
+            numeric_diagnostics["temporal_median_distance_max"] = (
+                float(smoothing_distance[changed].max().item())
+                if bool(changed.any().item())
+                else 0.0
+            )
         # Every TrackRAD query is made at t=0. Preserve the exact annotation
         # after optional temporal filtering.
         trajectories[:, 0] = queries[:, :, 1:3].to(trajectories.device)
@@ -139,6 +183,27 @@ def run_algorithm(
             config.visibility_threshold,
             config.confidence_threshold,
         )
+        if numeric_diagnostics is not None:
+            numeric_diagnostics["visibility_min"] = float(
+                tracking.visibility.min().item()
+            )
+            numeric_diagnostics["visibility_mean"] = float(
+                tracking.visibility.mean().item()
+            )
+            numeric_diagnostics["confidence_min"] = float(
+                tracking.confidence.min().item()
+            )
+            numeric_diagnostics["confidence_mean"] = float(
+                tracking.confidence.mean().item()
+            )
+            if config.visibility_threshold is not None:
+                numeric_diagnostics["visibility_below_threshold"] = int(
+                    (tracking.visibility < config.visibility_threshold).sum().item()
+                )
+            if config.confidence_threshold is not None:
+                numeric_diagnostics["confidence_below_threshold"] = int(
+                    (tracking.confidence < config.confidence_threshold).sum().item()
+                )
 
         prediction = resources.convert_point_trajectory_to_mask_sequence(
             trajectories,
@@ -146,6 +211,7 @@ def run_algorithm(
             validity=validity,
             morph_close_kernel=config.morph_close_kernel,
             keep_largest_component=config.keep_largest_component,
+            diagnostics=numeric_diagnostics,
         )  # should now be B, T, C, H, W
         logger.info("after TAP->SEG conversion:")
         logger.info(f"\tprediction.shape={prediction.shape}")
@@ -155,6 +221,13 @@ def run_algorithm(
         assert prediction.shape == (1, T, H, W), f"{prediction.shape} != {(1, T, H, W)}"
 
         if config.lock_first_mask:
+            if numeric_diagnostics is not None:
+                numeric_diagnostics["lock_first_mask_changed_pixels"] = int(
+                    (
+                        prediction[:, 0]
+                        != (target_tensor[:, 0] > 0.5)
+                    ).sum().item()
+                )
             prediction[:, 0] = target_tensor[:, 0] > 0.5
 
         # remove batch
@@ -162,5 +235,19 @@ def run_algorithm(
 
         # bring into output np format
         prediction = prediction.cpu().numpy().transpose(2, 1, 0)  # W, H, T
+
+        if diagnostics is not None and numeric_diagnostics is not None:
+            diagnostics["prediction"] = {
+                "shape": list(prediction.shape),
+                "foreground_voxels": int(np.count_nonzero(prediction)),
+                "array_sha256": hashlib.sha256(
+                    np.ascontiguousarray(prediction).tobytes()
+                ).hexdigest(),
+            }
+            print(
+                DIAGNOSTIC_PREFIX
+                + json.dumps(diagnostics, sort_keys=True, separators=(",", ":")),
+                flush=True,
+            )
 
     return prediction

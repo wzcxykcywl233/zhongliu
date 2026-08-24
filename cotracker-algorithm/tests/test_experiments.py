@@ -2,6 +2,7 @@ from dataclasses import fields
 import unittest
 
 from experiments import (
+    AUDIT_EXPERIMENTS,
     BASELINE,
     COMBINATION_EXPERIMENTS,
     EXPERIMENTS,
@@ -56,8 +57,12 @@ class ExperimentTests(unittest.TestCase):
             set(EXPERIMENTS),
             set(SINGLE_POINT_EXPERIMENTS)
             | set(COMBINATION_EXPERIMENTS)
-            | set(HIERARCHICAL_EXPERIMENTS),
+            | set(HIERARCHICAL_EXPERIMENTS)
+            | set(AUDIT_EXPERIMENTS),
         )
+
+    def test_audit_baseline_repeat_is_an_exact_duplicate(self) -> None:
+        self.assertEqual(AUDIT_EXPERIMENTS, {"baseline_repeat": BASELINE})
 
     def test_hierarchical_profiles_form_the_requested_ablation_series(self) -> None:
         expected = {

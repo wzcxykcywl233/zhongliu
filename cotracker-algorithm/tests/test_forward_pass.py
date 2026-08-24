@@ -149,6 +149,7 @@ class ForwardPassTests(unittest.TestCase):
         model = HierarchicalFakeCoTracker(occluded_query_x=2.0)
         video = torch.zeros((1, 7, 1, 8, 8))
         queries = torch.tensor([[[0.0, 0.0, 0.0]]])
+        diagnostics = {}
         result = resource_model.hierarchical_forward_pass(
             model,
             video,
@@ -158,10 +159,13 @@ class ForwardPassTests(unittest.TestCase):
             occlusion_merge=True,
             occlusion_visibility_threshold=0.5,
             occlusion_point_fraction=0.5,
+            diagnostics=diagnostics,
             device="cpu",
         )
         self.assertEqual([call["frames"] for call in model.calls], [3, 3, 7])
         self.assertTrue(torch.all(result.visibility == 1.0))
+        self.assertEqual(diagnostics["occlusion_merges"], 1)
+        self.assertEqual(diagnostics["hierarchical_level_runs"], 3)
 
     def test_feature_gate_selects_appearance_consistent_branch_when_far(self) -> None:
         local = resource_model.TrackingResult(
@@ -174,6 +178,7 @@ class ForwardPassTests(unittest.TestCase):
             visibility=torch.ones((1, 2, 1)),
             confidence=torch.ones((1, 2, 1)),
         )
+        diagnostics = {}
         result, gate_mask, similarity = resource_model.feature_gate_tracking_results(
             local,
             global_result,
@@ -181,11 +186,15 @@ class ForwardPassTests(unittest.TestCase):
             global_similarity=torch.tensor([[[0.9], [0.9]]]),
             global_weight=0.5,
             distance_threshold=4.0,
+            diagnostics=diagnostics,
         )
         self.assertFalse(bool(gate_mask[0, 0, 0]))
         self.assertTrue(bool(gate_mask[0, 1, 0]))
         self.assertEqual(float(result.trajectories[0, 1, 0, 0]), 10.0)
         self.assertAlmostEqual(float(similarity[0, 1, 0]), 0.9, places=5)
+        self.assertEqual(diagnostics["feature_gate_candidates"], 1)
+        self.assertEqual(diagnostics["feature_gate_choose_global"], 1)
+        self.assertEqual(diagnostics["feature_gate_choose_local"], 0)
 
     def test_feature_gate_keeps_weighted_fusion_when_branches_are_close(self) -> None:
         local = resource_model.TrackingResult(

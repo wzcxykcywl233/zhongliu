@@ -7,7 +7,8 @@ param(
         "hierarchical_d10_original_feat_075",
         "hierarchical_full_d5",
         "hierarchical_full_d15"
-    )
+    ),
+    [switch]$RequireDiagnostics
 )
 
 $ErrorActionPreference = "Stop"
@@ -125,12 +126,15 @@ try {
                 $CompletedMarker = Join-Path $CompletedDir ".complete"
                 $CompletedPrediction = Join-Path $CompletedDir "prediction.json"
                 $CompletedOutput = Join-Path $CompletedDir "output\images\mri-linac-series-targets\output.mha"
+                $CompletedDiagnostics = Join-Path $CompletedDir "diagnostics.json"
 
                 $ValidCheckpoint =
                     (Test-Path -LiteralPath $CompletedMarker -PathType Leaf) -and
                     (Test-Path -LiteralPath $CompletedPrediction -PathType Leaf) -and
                     (Test-Path -LiteralPath $CompletedOutput -PathType Leaf) -and
-                    ((Get-Item -LiteralPath $CompletedOutput).Length -gt 0)
+                    ((Get-Item -LiteralPath $CompletedOutput).Length -gt 0) -and
+                    ((-not $RequireDiagnostics) -or
+                        (Test-Path -LiteralPath $CompletedDiagnostics -PathType Leaf))
 
                 if ($ValidCheckpoint) {
                     Write-RunMessage "Checkpoint hit: $Profile/$CaseId"
@@ -150,7 +154,7 @@ try {
 
                 Write-RunMessage "Running: $Profile/$CaseId"
                 $StartedAt = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
-                $Status = Invoke-DockerLogged -LogPath $CaseLog -Arguments @(
+                $DockerArguments = @(
                     "run", "--rm",
                     "--platform=linux/amd64",
                     "--network", "none",
@@ -164,6 +168,17 @@ try {
                     "--mount", "type=bind,source=$AttemptOutput,target=/output",
                     "trackrad-algorithm-cotracker-algorithm"
                 )
+                if ($RequireDiagnostics) {
+                    $ImageIndex = $DockerArguments.Count - 1
+                    $DockerArguments = @(
+                        $DockerArguments[0..($ImageIndex - 1)] +
+                        @("--env", "TRACKRAD_DIAGNOSTICS=1") +
+                        $DockerArguments[$ImageIndex]
+                    )
+                }
+                $Status = Invoke-DockerLogged `
+                    -LogPath $CaseLog `
+                    -Arguments $DockerArguments
                 if ($Status -ne 0) {
                     throw "$Profile/$CaseId failed with exit code $Status"
                 }
@@ -173,6 +188,34 @@ try {
                 if (-not (Test-Path -LiteralPath $Output -PathType Leaf) -or
                     (Get-Item -LiteralPath $Output).Length -le 0) {
                     throw "$Profile/$CaseId did not produce a valid output.mha"
+                }
+
+                if ($RequireDiagnostics) {
+                    $Prefix = "TRACKRAD_DIAGNOSTICS_JSON="
+                    $DiagnosticLines = @(
+                        Get-Content -LiteralPath $CaseLog |
+                            Where-Object { $_.StartsWith($Prefix) }
+                    )
+                    if ($DiagnosticLines.Count -ne 1) {
+                        throw "$Profile/$CaseId produced $($DiagnosticLines.Count) diagnostic records; expected 1"
+                    }
+                    try {
+                        $Diagnostic = $DiagnosticLines[0].Substring($Prefix.Length) |
+                            ConvertFrom-Json
+                    }
+                    catch {
+                        throw "$Profile/$CaseId produced invalid diagnostic JSON: $($_.Exception.Message)"
+                    }
+                    if ($Diagnostic.profile -ne $Profile) {
+                        throw "$Profile/$CaseId reported profile '$($Diagnostic.profile)'"
+                    }
+                    $OutputHash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $Diagnostic.prediction |
+                        Add-Member -NotePropertyName output_file_sha256 `
+                            -NotePropertyValue $OutputHash -Force
+                    Write-AtomicJson `
+                        -Path (Join-Path $AttemptDir "diagnostics.json") `
+                        -Value $Diagnostic
                 }
 
                 $Prediction = [ordered]@{

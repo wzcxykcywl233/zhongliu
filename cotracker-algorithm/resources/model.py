@@ -12,6 +12,25 @@ from tuning import interpolate_keyframes
 logger = logging.getLogger(__name__)
 
 
+def _diagnostic_add(
+    diagnostics: dict[str, int | float] | None,
+    key: str,
+    value: int | float,
+) -> None:
+    """Accumulate a numeric diagnostic without affecting submission inference."""
+    if diagnostics is not None:
+        diagnostics[key] = diagnostics.get(key, 0) + value
+
+
+def _diagnostic_max(
+    diagnostics: dict[str, int | float] | None,
+    key: str,
+    value: int | float,
+) -> None:
+    if diagnostics is not None:
+        diagnostics[key] = max(diagnostics.get(key, value), value)
+
+
 class TrackingResult(NamedTuple):
     trajectories: torch.Tensor
     visibility: torch.Tensor
@@ -337,6 +356,7 @@ def feature_gate_tracking_results(
     global_similarity: torch.Tensor,
     global_weight: float,
     distance_threshold: float,
+    diagnostics: dict[str, int | float] | None = None,
 ) -> tuple[TrackingResult, torch.Tensor, torch.Tensor]:
     """Use appearance reliability to select a branch when positions disagree."""
     if distance_threshold <= 0:
@@ -362,6 +382,17 @@ def feature_gate_tracking_results(
         * ((global_similarity + 1.0) * 0.5).clamp(0.0, 1.0)
     )
     choose_global = global_quality > local_quality
+    _diagnostic_add(diagnostics, "feature_gate_candidates", int(gate_mask.sum().item()))
+    _diagnostic_add(
+        diagnostics,
+        "feature_gate_choose_global",
+        int((gate_mask & choose_global).sum().item()),
+    )
+    _diagnostic_add(
+        diagnostics,
+        "feature_gate_choose_local",
+        int((gate_mask & ~choose_global).sum().item()),
+    )
     selected_trajectories = torch.where(
         choose_global[..., None],
         global_result.trajectories,
@@ -398,6 +429,7 @@ def revalidate_in_feature_neighborhood(
     revalidate_mask: torch.Tensor,
     radius: int,
     image_shape: tuple[int, int],
+    diagnostics: dict[str, int | float] | None = None,
 ) -> tuple[TrackingResult, torch.Tensor]:
     """Search a bounded image-space neighborhood for a better feature match."""
     if radius < 1:
@@ -440,6 +472,31 @@ def revalidate_in_feature_neighborhood(
 
     trajectories[:, 0] = result.trajectories[:, 0]
     corrected[:, 0] = False
+    correction_distance = torch.linalg.vector_norm(
+        trajectories - base_trajectories,
+        dim=-1,
+    )
+    _diagnostic_add(
+        diagnostics,
+        "feature_revalidate_candidates",
+        int(revalidate_mask.sum().item()),
+    )
+    _diagnostic_add(
+        diagnostics,
+        "feature_revalidate_corrected",
+        int(corrected.sum().item()),
+    )
+    _diagnostic_add(
+        diagnostics,
+        "feature_revalidate_distance_sum",
+        float(correction_distance[corrected].sum().item()),
+    )
+    if bool(corrected.any().item()):
+        _diagnostic_max(
+            diagnostics,
+            "feature_revalidate_distance_max",
+            float(correction_distance[corrected].max().item()),
+        )
     return (
         TrackingResult(trajectories, result.visibility, result.confidence),
         corrected,
@@ -476,6 +533,7 @@ def hierarchical_forward_pass(
     feature_gate_distance: float = 0.0,
     feature_similarity_threshold: float = 0.5,
     feature_revalidate_radius: int = 0,
+    diagnostics: dict[str, int | float] | None = None,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> TrackingResult:
     """Track short levels, re-anchor at endpoints, and optionally merge occlusions."""
@@ -501,6 +559,10 @@ def hierarchical_forward_pass(
     queries[..., 0] = 0
     batch, total_frames = video.shape[:2]
     point_count = queries.shape[1]
+    if diagnostics is not None:
+        diagnostics["hierarchical_span"] = span
+        diagnostics["hierarchical_point_count"] = point_count
+        diagnostics["hierarchical_total_frames"] = total_frames
     if total_frames == 1:
         result, _, _ = _run_single_clip(
             model,
@@ -542,6 +604,12 @@ def hierarchical_forward_pass(
 
     def run_level(level_start, level_end, level_queries):
         nonlocal original_memory
+        _diagnostic_add(diagnostics, "hierarchical_level_runs", 1)
+        _diagnostic_add(
+            diagnostics,
+            "hierarchical_level_frame_visits",
+            level_end - level_start + 1,
+        )
         capture_memory = (
             (original_feature_weight > 0 or validation_enabled)
             and original_memory is None
@@ -589,6 +657,29 @@ def hierarchical_forward_pass(
                 global_similarity = (
                     global_features * reference[:, None]
                 ).sum(dim=-1)
+                disagreement = torch.linalg.vector_norm(
+                    result.trajectories - global_slice.trajectories,
+                    dim=-1,
+                )
+                disagreement_mask = torch.ones_like(disagreement, dtype=torch.bool)
+                disagreement_mask[:, 0] = False
+                measured_disagreement = disagreement[disagreement_mask]
+                _diagnostic_add(
+                    diagnostics,
+                    "dual_anchor_point_frames",
+                    int(measured_disagreement.numel()),
+                )
+                _diagnostic_add(
+                    diagnostics,
+                    "dual_anchor_disagreement_sum",
+                    float(measured_disagreement.sum().item()),
+                )
+                if measured_disagreement.numel() > 0:
+                    _diagnostic_max(
+                        diagnostics,
+                        "dual_anchor_disagreement_max",
+                        float(measured_disagreement.max().item()),
+                    )
                 result, gate_mask, selected_similarity = feature_gate_tracking_results(
                     result,
                     global_slice,
@@ -596,6 +687,7 @@ def hierarchical_forward_pass(
                     global_similarity,
                     dual_anchor_weight,
                     feature_gate_distance,
+                    diagnostics,
                 )
                 logger.info(
                     "Feature gate selected one branch for %d point-frames",
@@ -606,6 +698,11 @@ def hierarchical_forward_pass(
                         torch.maximum(local_similarity, global_similarity)
                         < feature_similarity_threshold
                     )
+                    _diagnostic_add(
+                        diagnostics,
+                        "feature_both_below_threshold",
+                        int(revalidate_mask.sum().item()),
+                    )
                     result, corrected = revalidate_in_feature_neighborhood(
                         model,
                         frame_features,
@@ -614,12 +711,36 @@ def hierarchical_forward_pass(
                         revalidate_mask,
                         feature_revalidate_radius,
                         tuple(video.shape[-2:]),
+                        diagnostics,
                     )
                     logger.info(
                         "Feature neighborhood corrected %d point-frames",
                         int(corrected.sum().item()),
                     )
             else:
+                disagreement = torch.linalg.vector_norm(
+                    result.trajectories - global_slice.trajectories,
+                    dim=-1,
+                )
+                disagreement_mask = torch.ones_like(disagreement, dtype=torch.bool)
+                disagreement_mask[:, 0] = False
+                measured_disagreement = disagreement[disagreement_mask]
+                _diagnostic_add(
+                    diagnostics,
+                    "dual_anchor_point_frames",
+                    int(measured_disagreement.numel()),
+                )
+                _diagnostic_add(
+                    diagnostics,
+                    "dual_anchor_disagreement_sum",
+                    float(measured_disagreement.sum().item()),
+                )
+                if measured_disagreement.numel() > 0:
+                    _diagnostic_max(
+                        diagnostics,
+                        "dual_anchor_disagreement_max",
+                        float(measured_disagreement.max().item()),
+                    )
                 result = fuse_tracking_results(
                     result, global_slice, dual_anchor_weight
                 )
@@ -645,7 +766,10 @@ def hierarchical_forward_pass(
                 occlusion_point_fraction,
             )
         )
+        if occlusion_merge:
+            _diagnostic_add(diagnostics, "occlusion_merge_checks", 1)
         if should_merge:
+            _diagnostic_add(diagnostics, "occlusion_merges", 1)
             merge_start = previous_start if previous_start is not None else start
             merge_queries = previous_queries if previous_queries is not None else current_queries
             merge_end = min(end + span, total_frames - 1)

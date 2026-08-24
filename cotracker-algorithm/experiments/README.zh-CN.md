@@ -190,3 +190,25 @@ python cotracker-algorithm/experiments/run_ablation.py \
   --dataset-dir ./dataset/trackrad2025_labeled_training_data \
   --profiles grid0_iterations2 grid0_stride2 grid0_iterations2_stride2
 ```
+
+## 全量可审计复验
+
+`scripts/run_full_audit_resumable.ps1` 会重新运行全部往期实验，并额外运行
+与基线配置完全相同的 `baseline_repeat`。每个病例在原子提交检查点前还会
+保存 `diagnostics.json`，其中包含实际 profile、完整配置及其 SHA-256、预测
+数组和输出文件 SHA-256，以及阈值剔除、时序中值、闭运算、最大连通域、
+遮挡合并、特征门控和邻域重校验等机制的实际触发统计。
+
+断电或 Docker 中断后，重新执行同一命令即可跳过已完整提交的病例：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  "C:\zhongliu\zhongliu-tuning\scripts\run_full_audit_resumable.ps1"
+```
+
+全部完成后会生成 `full-audit-results/audit-results.csv` 和
+`full-audit-results/audit-summary.json`。`CasesChangedVsBaseline=0` 表示该
+profile 的每一个病例输出文件都与基线逐字节相同；只有同时确认
+`baseline_repeat_deterministic=true` 后，才能将这种零差异解释为参数在本
+数据集上未产生实际作用。主比较使用未压缩预测数组的 SHA-256；另行记录
+MHA 文件 SHA-256，以排除序列化层面的差异。
