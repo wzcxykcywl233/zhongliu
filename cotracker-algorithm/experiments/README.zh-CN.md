@@ -191,6 +191,34 @@ python cotracker-algorithm/experiments/run_ablation.py \
   --profiles grid0_iterations2 grid0_stride2 grid0_iterations2_stride2
 ```
 
+## 分级特征记忆与最优基础设置的组合验证
+
+全量审计确认 `grid0_iterations2` 是当前综合最佳基础设置，而
+`hierarchical_d10_original_feat_05` 取得最高 DSC。以下六组实验保持
+CoTracker3 权重、`hierarchical_span=10`、`original_feature_weight=0.5` 和
+`temporal_stride=1` 不变，分别验证取消支撑网格及减少迭代次数的独立与联合
+作用：
+
+| Profile | 支撑网格 | 迭代 | 遮挡合并 | 双锚点 | 验证目标 |
+|---|---:|---:|---|---:|---|
+| `hierarchical_feat05_grid0` | 0 | 4 | 否 | 0 | 身份记忆 + 取消网格 |
+| `hierarchical_feat05_iterations2` | 10 | 2 | 否 | 0 | 身份记忆 + 减少迭代 |
+| `hierarchical_feat05_grid0_iterations2` | 0 | 2 | 否 | 0 | 轻量组合候选 |
+| `hierarchical_full_grid0` | 0 | 4 | 是 | 0.5 | 完整方案 + 取消网格 |
+| `hierarchical_full_iterations2` | 10 | 2 | 是 | 0.5 | 完整方案 + 减少迭代 |
+| `hierarchical_full_grid0_iterations2` | 0 | 2 | 是 | 0.5 | 完整组合候选 |
+
+使用 Windows PowerShell 断点续跑全部六组实验：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  "C:\zhongliu\zhongliu-tuning\scripts\run_hierarchical_combinations_resumable.ps1"
+```
+
+结果写入 `hierarchical-combination-results`。每个病例仅在输出、预测元数据和
+诊断记录完整后原子提交；断电后重新执行同一命令即可跳过已完成病例。脚本
+不启用 `temporal_stride=2`、特征门控或邻域重校验，以保持组合变量可归因。
+
 ## 全量可审计复验
 
 `scripts/run_full_audit_resumable.ps1` 会重新运行全部往期实验，并额外运行

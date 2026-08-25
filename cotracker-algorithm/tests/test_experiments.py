@@ -118,15 +118,57 @@ class ExperimentTests(unittest.TestCase):
                 "occlusion_merge": True,
                 "dual_anchor_weight": 0.5,
                 "feature_gate_distance": 4.0,
-                "feature_similarity_threshold": 0.5,
                 "feature_revalidate_radius": 4,
+            },
+            "hierarchical_feat05_grid0": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+            },
+            "hierarchical_feat05_iterations2": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "n_iterations": 2,
+            },
+            "hierarchical_feat05_grid0_iterations2": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+            },
+            "hierarchical_full_grid0": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+            },
+            "hierarchical_full_iterations2": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+            },
+            "hierarchical_full_grid0_iterations2": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
             },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
+        names = [field.name for field in fields(ExperimentConfig)]
         for profile, changes in expected.items():
             config = HIERARCHICAL_EXPERIMENTS[profile]
-            for name, value in changes.items():
-                self.assertEqual(getattr(config, name), value, (profile, name))
+            actual = {
+                name: getattr(config, name)
+                for name in names
+                if getattr(config, name) != getattr(BASELINE, name)
+            }
+            self.assertEqual(actual, changes, profile)
 
     def test_unknown_profile_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown COTRACKER_EXPERIMENT"):

@@ -105,3 +105,33 @@ python cotracker-algorithm/experiments/run_ablation.py \
   --dataset-dir ./dataset/trackrad2025_labeled_training_data \
   --profiles grid0_iterations2 grid0_stride2 grid0_iterations2_stride2
 ```
+
+## Combining hierarchical feature memory with the best base settings
+
+The full audit identified `grid0_iterations2` as the best balanced base
+configuration, while `hierarchical_d10_original_feat_05` achieved the highest
+DSC.  These six profiles keep the fixed CoTracker3 weights,
+`hierarchical_span=10`, `original_feature_weight=0.5`, and
+`temporal_stride=1`, then test support-grid removal and two refinements both
+separately and together:
+
+| Profile | Grid | Iterations | Occlusion merge | Dual anchor | Goal |
+|---|---:|---:|---|---:|---|
+| `hierarchical_feat05_grid0` | 0 | 4 | no | 0 | Feature memory plus no grid |
+| `hierarchical_feat05_iterations2` | 10 | 2 | no | 0 | Feature memory plus two refinements |
+| `hierarchical_feat05_grid0_iterations2` | 0 | 2 | no | 0 | Lightweight combined candidate |
+| `hierarchical_full_grid0` | 0 | 4 | yes | 0.5 | Full hierarchy plus no grid |
+| `hierarchical_full_iterations2` | 10 | 2 | yes | 0.5 | Full hierarchy plus two refinements |
+| `hierarchical_full_grid0_iterations2` | 0 | 2 | yes | 0.5 | Fully combined candidate |
+
+Run all six with per-case crash recovery and diagnostics:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  "C:\zhongliu\zhongliu-tuning\scripts\run_hierarchical_combinations_resumable.ps1"
+```
+
+Results are written to `hierarchical-combination-results`.  Re-running the
+same command skips atomically committed cases.  Stride 2, feature gating, and
+neighborhood revalidation stay disabled so the combined effects remain
+attributable.

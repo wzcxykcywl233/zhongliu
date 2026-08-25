@@ -179,6 +179,44 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         feature_similarity_threshold=0.5,
         feature_revalidate_radius=4,
     ),
+    "hierarchical_feat05_grid0": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+    ),
+    "hierarchical_feat05_iterations2": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        n_iterations=2,
+    ),
+    "hierarchical_feat05_grid0_iterations2": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+    ),
+    "hierarchical_full_grid0": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full_iterations2": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full_grid0_iterations2": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+    ),
 }
 
 # Audit-only duplicate of the baseline.  Comparing its per-case output hash with
