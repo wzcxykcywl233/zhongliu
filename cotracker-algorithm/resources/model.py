@@ -47,6 +47,7 @@ def setup_model(
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> CoTrackerThreeOffline:
     ts_start = datetime.now()
+    checkpoint = os.environ.get("COTRACKER_CHECKPOINT", checkpoint)
     if checkpoint == "cotracker3_offline":
         local_source = Path(
             os.environ.get(

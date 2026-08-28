@@ -1,0 +1,17 @@
+FROM --platform=linux/amd64 pytorch/pytorch:latest
+
+ENV PYTHONUNBUFFERED=1
+ENV CONDA_OVERRIDE_CUDA=12.4
+
+RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
+RUN groupadd -r user && useradd -m --no-log-init -r -g user user
+
+USER user
+WORKDIR /opt/app
+ENV TORCH_HOME=/opt/app/torch/
+
+RUN curl -fsSL https://pixi.sh/install.sh | bash
+COPY --chown=user:user . /opt/app/
+RUN /home/user/.pixi/bin/pixi install -e training
+
+ENTRYPOINT ["/opt/app/.pixi/envs/training/bin/python", "/opt/app/ext/co-tracker/train_on_real_data.py"]

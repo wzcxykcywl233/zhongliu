@@ -6,6 +6,7 @@
 
 import os
 import random
+import copy
 import torch
 import signal
 import socket
@@ -24,7 +25,6 @@ from torch.cuda.amp import GradScaler
 
 from pytorch_lightning.lite import LightningLite
 
-from cotracker.models.bootstap_predictor import TAPIRPredictor
 from cotracker.models.core.cotracker.cotracker import CoTracker2
 from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOffline
 from cotracker.models.core.cotracker.cotracker3_online import CoTrackerThreeOnline
@@ -41,6 +41,10 @@ from cotracker.models.core.model_utils import (
 )
 from cotracker.models.core.cotracker.losses import sequence_loss
 from cotracker.models.build_cotracker import build_cotracker
+from cotracker.utils.teacher_sampling import (
+    TeacherPairSampler,
+    blend_teacher_losses,
+)
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -72,7 +76,9 @@ def fetch_optimizer(args, model):
     return optimizer, scheduler
 
 
-def forward_batch(batch, model, args, teacher_models):
+def _forward_batch_single_teacher(
+    batch, model, args, teacher_models, teacher_model_ind, queries=None
+):
     video = batch.video
     trajs_g = batch.trajectory
     vis_g = batch.visibility
@@ -82,7 +88,9 @@ def forward_batch(batch, model, args, teacher_models):
     B, T, N, D = trajs_g.shape
     device = video.device
     failed_sample = False
-    if args.real_data_filter_sift:
+    if queries is not None:
+        queries = queries.clone()
+    elif args.real_data_filter_sift:
         queries = get_sift_sampled_pts(video, N, T, [H, W], device=device)
 
         if queries.shape[1] < N:
@@ -102,8 +110,6 @@ def forward_batch(batch, model, args, teacher_models):
         queries = get_uniformly_sampled_pts(N, T, [H, W], device=device)
     # Inference with additional points sampled on a regular grid usually makes predictions better.
     # So we sample these points and discard them thereafter
-
-    teacher_model_ind = random.choice(range(len(teacher_models)))
 
     teacher_model_type, teacher_model = teacher_models[teacher_model_ind]
     uniform_size = grid_size = sift_size = 0
@@ -286,6 +292,135 @@ def forward_batch(batch, model, args, teacher_models):
         return output
 
 
+def _clone_teacher_batch(batch):
+    """Copy pseudo-label fields while sharing the immutable input video."""
+
+    cloned = copy.copy(batch)
+    for field in ("trajectory", "visibility", "valid"):
+        value = getattr(batch, field, None)
+        if value is not None:
+            setattr(cloned, field, value.clone())
+    return cloned
+
+
+def _sum_output_losses(output):
+    total = None
+    for value in output.values():
+        if isinstance(value, dict) and "loss" in value:
+            total = value["loss"] if total is None else total + value["loss"]
+    if total is None:
+        raise RuntimeError("teacher forward pass produced no loss")
+    return total
+
+
+def _unwrap_model(model):
+    while hasattr(model, "module"):
+        model = model.module
+    return model
+
+
+def _capture_rng_state():
+    numpy_state = np.random.get_state()
+    state = {
+        "python": random.getstate(),
+        "numpy": {
+            "bit_generator": numpy_state[0],
+            "state": torch.from_numpy(numpy_state[1].copy()),
+            "position": numpy_state[2],
+            "has_gauss": numpy_state[3],
+            "cached_gaussian": numpy_state[4],
+        },
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state):
+    if not state:
+        return
+    random.setstate(state["python"])
+    numpy_state = state["numpy"]
+    np.random.set_state(
+        (
+            numpy_state["bit_generator"],
+            numpy_state["state"].cpu().numpy(),
+            numpy_state["position"],
+            numpy_state["has_gauss"],
+            numpy_state["cached_gaussian"],
+        )
+    )
+    torch.set_rng_state(state["torch"].cpu())
+    if torch.cuda.is_available() and "cuda" in state:
+        torch.cuda.set_rng_state_all([value.cpu() for value in state["cuda"]])
+
+
+def forward_batch(batch, model, args, teacher_models, teacher_sampler):
+    """Run the baseline teacher and an optional random low-weight tutor.
+
+    The two student forward passes are deliberately kept independent.  Their
+    losses are normalized to ``(1-alpha) * primary + alpha * auxiliary``, so
+    changing ``alpha`` does not change the total distillation-loss scale.
+    """
+
+    selection = teacher_sampler.sample()
+    primary_batch = _clone_teacher_batch(batch)
+    primary_output = _forward_batch_single_teacher(
+        primary_batch,
+        model,
+        args,
+        teacher_models,
+        selection.primary,
+    )
+    primary_loss = _sum_output_losses(primary_output)
+    auxiliary_loss = None
+
+    if selection.auxiliary is not None:
+        if selection.auxiliary == selection.primary:
+            # Exact implementation control: no second forward pass or extra
+            # model-state update is allowed to distinguish it from baseline.
+            auxiliary_loss = primary_loss
+        else:
+            auxiliary_batch = _clone_teacher_batch(batch)
+            auxiliary_output = _forward_batch_single_teacher(
+                auxiliary_batch,
+                model,
+                args,
+                teacher_models,
+                selection.auxiliary,
+                queries=primary_output["flow"]["queries"],
+            )
+            auxiliary_loss = _sum_output_losses(auxiliary_output)
+
+    # Keep primary pseudo labels for visualization and diagnostics.
+    batch.trajectory = primary_batch.trajectory
+    batch.visibility = primary_batch.visibility
+
+    blended_loss = blend_teacher_losses(
+        primary_loss,
+        auxiliary_loss,
+        args.auxiliary_teacher_weight,
+    )
+    # The training loop sums every nested ``loss`` field. Remove the original
+    # components and expose exactly one normalized objective.
+    for value in primary_output.values():
+        if isinstance(value, dict):
+            value.pop("loss", None)
+    primary_output["flow"]["loss"] = blended_loss
+    primary_output["teacher_sampling"] = {
+        "primary_index": selection.primary,
+        "auxiliary_index": selection.auxiliary,
+        "primary_loss_value": float(primary_loss.detach().cpu()),
+        "auxiliary_loss_value": (
+            None
+            if auxiliary_loss is None
+            else float(auxiliary_loss.detach().cpu())
+        ),
+    }
+    return primary_output
+
+
 class Lite(LightningLite):
     def run(self, args):
         def seed_everything(seed: int):
@@ -297,7 +432,7 @@ class Lite(LightningLite):
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
-        seed_everything(0)
+        seed_everything(args.seed)
 
         def seed_worker(worker_id):
             worker_seed = torch.initial_seed() % 2**32
@@ -305,31 +440,28 @@ class Lite(LightningLite):
             random.seed(worker_seed)
 
         g = torch.Generator()
-        g.manual_seed(0)
+        g.manual_seed(args.seed)
 
         if self.global_rank == 0:
             eval_dataloaders = []
-            for ds_name in args.eval_datasets:
-                eval_dataloaders.append(
-                    (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
-                )
-            if not args.debug:
+            final_dataloaders = []
+            evaluator = None
+            if not args.skip_evaluation:
+                for ds_name in args.eval_datasets:
+                    eval_dataloaders.append(
+                        (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
+                    )
                 final_dataloaders = [dl for dl in eval_dataloaders]
-                ds_name = "tapvid_kinetics_first"
-                final_dataloaders.append(
-                    (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
-                )
-
-                ds_name = "tapvid_robotap"
-                final_dataloaders.append(
-                    (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
-                )
-
-                ds_name = "dynamic_replica"
-                final_dataloaders.append(
-                    (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
-                )
-            evaluator = Evaluator(args.ckpt_path)
+                if not args.debug:
+                    for ds_name in (
+                        "tapvid_kinetics_first",
+                        "tapvid_robotap",
+                        "dynamic_replica",
+                    ):
+                        final_dataloaders.append(
+                            (ds_name, get_eval_dataloader(args.dataset_root, ds_name))
+                        )
+                evaluator = Evaluator(args.ckpt_path)
 
             visualizer = Visualizer(
                 save_dir=args.ckpt_path,
@@ -371,71 +503,93 @@ class Lite(LightningLite):
 
         model.cuda()
         teacher_models = []
-        from cotracker.datasets import real_dataset
+        if args.model_name != "cotracker_three":
+            raise ValueError("random tutor training currently requires cotracker_three")
 
-        train_dataset = real_dataset.RealDataset(
-            crop_size=args.crop_size,
-            seq_len=args.sequence_len,
-            traj_per_sample=args.traj_per_sample,
-            random_frame_rate=args.random_frame_rate,
-            random_seq_len=args.offline_model,
-            data_splits=args.real_data_splits,
-            random_resize=False,
-            limit_samples=args.limit_samples,
-        )
+        for teacher_type in args.teacher_types:
+            if teacher_type == "cotracker2v1":
+                checkpoint = args.teacher_cotracker2_ckpt
+                teacher_model = (
+                    build_cotracker(
+                        window_len=16,
+                        offline=False,
+                        checkpoint=checkpoint,
+                        v2=True,
+                    )
+                    .cuda()
+                    .eval()
+                )
+                teacher_models.append(("online", teacher_model))
+            elif teacher_type == "online_cotracker_three":
+                checkpoint = args.teacher_online_ckpt
+                teacher_model = (
+                    build_cotracker(
+                        checkpoint=checkpoint,
+                        offline=False,
+                        window_len=16,
+                    )
+                    .cuda()
+                    .eval()
+                )
+                teacher_models.append((teacher_type, teacher_model))
+            elif teacher_type == "offline_cotracker_three":
+                checkpoint = args.teacher_offline_ckpt
+                teacher_model = (
+                    build_cotracker(
+                        checkpoint=checkpoint,
+                        offline=True,
+                        window_len=60,
+                    )
+                    .cuda()
+                    .eval()
+                )
+                teacher_models.append((teacher_type, teacher_model))
+            elif teacher_type == "tapir":
+                from cotracker.models.bootstap_predictor import TAPIRPredictor
 
-        if args.model_name == "cotracker":
-            teacher_model_online = (
-                build_cotracker(
-                    window_len=args.sliding_window_len, checkpoint=args.restore_ckpt
-                )
-                .cuda()
-                .eval()
+                teacher_models.append(("tapir", TAPIRPredictor()))
+            else:
+                raise ValueError(f"Unsupported teacher type: {teacher_type}")
+
+        if args.trackrad_data_dir:
+            from cotracker.datasets.trackrad_video_dataset import TrackRADVideoDataset
+
+            train_dataset = TrackRADVideoDataset(
+                root=args.trackrad_data_dir,
+                crop_size=args.crop_size,
+                seq_len=args.sequence_len,
+                traj_per_sample=args.traj_per_sample,
+                random_frame_rate=args.random_frame_rate,
+                limit_samples=args.limit_samples,
             )
-            teacher_models.append(("online", teacher_model_online))
-        elif args.model_name == "cotracker_three":
-            teacher_model_online = (
-                build_cotracker(
-                    window_len=16,
-                    offline=False,
-                    checkpoint="./checkpoints/cotracker2v1.pth",
-                    v2=True,
-                )
-                .cuda()
-                .eval()
-            )
-            teacher_models.append(("online", teacher_model_online))
         else:
-            raise ValueError(f"Model {args.model_name} doesn't exist")
+            from cotracker.datasets import real_dataset
 
-        online_checkpoint = "./checkpoints/baseline_online.pth"
-        if args.model_name == "cotracker_three" and not args.offline_model:
-            online_checkpoint = args.restore_ckpt
-        print("online_checkpoint", online_checkpoint)
-        teacher_model_online_cot_three = (
-            build_cotracker(checkpoint=online_checkpoint, offline=False, window_len=16)
-            .cuda()
-            .eval()
-        )
-        teacher_models.append(
-            ("online_cotracker_three", teacher_model_online_cot_three)
-        )
+            train_dataset = real_dataset.RealDataset(
+                crop_size=args.crop_size,
+                seq_len=args.sequence_len,
+                traj_per_sample=args.traj_per_sample,
+                random_frame_rate=args.random_frame_rate,
+                random_seq_len=args.offline_model,
+                data_splits=args.real_data_splits,
+                random_resize=False,
+                limit_samples=args.limit_samples,
+            )
 
-        offline_checkpoint = "./checkpoints/baseline_offline.pth"
-        if args.model_name == "cotracker_three" and args.offline_model:
-            offline_checkpoint = args.restore_ckpt
-
-        teacher_model_offline_cot_three = (
-            build_cotracker(checkpoint=offline_checkpoint, offline=True, window_len=60)
-            .cuda()
-            .eval()
+        teacher_sampler = TeacherPairSampler(
+            teacher_count=len(teacher_models),
+            auxiliary_weight=args.auxiliary_teacher_weight,
+            seed=args.teacher_seed + self.global_rank,
+            same_teacher_control=args.same_teacher_control,
         )
-        teacher_models.append(
-            ("offline_cotracker_three", teacher_model_offline_cot_three)
-        )
-
-        teacher_model_tapir = TAPIRPredictor()
-        teacher_models.append(("tapir", teacher_model_tapir))
+        if self.global_rank == 0:
+            logging.info(
+                "Experiment %s; teacher pool: %s; auxiliary weight: %.4f; same-teacher control: %s",
+                args.experiment_name,
+                [name for name, _ in teacher_models],
+                args.auxiliary_teacher_weight,
+                args.same_teacher_control,
+            )
 
         train_loader = DataLoader(
             train_dataset,
@@ -454,13 +608,17 @@ class Lite(LightningLite):
         optimizer, scheduler = fetch_optimizer(args, model)
 
         total_steps = 0
+        resume_epoch = 0
+        resume_batch = 0
         if self.global_rank == 0:
             logger = Logger(model, scheduler, args.ckpt_path)
 
         folder_ckpts = [
             f
             for f in os.listdir(args.ckpt_path)
-            if not os.path.isdir(f) and f.endswith(".pth") and not "final" in f
+            if not os.path.isdir(os.path.join(args.ckpt_path, f))
+            and f.endswith(".pth")
+            and not "final" in f
         ]
         if len(folder_ckpts) > 0:
             ckpt_path = sorted(folder_ckpts)[-1]
@@ -479,6 +637,19 @@ class Lite(LightningLite):
             if "total_steps" in ckpt:
                 total_steps = ckpt["total_steps"]
                 logging.info(f"Load total_steps {total_steps}")
+            if "teacher_sampler" in ckpt:
+                teacher_sampler.load_state_dict(ckpt["teacher_sampler"])
+                logging.info("Load teacher sampler state")
+            if "rng_state" in ckpt:
+                _restore_rng_state(ckpt["rng_state"])
+                logging.info("Load random-number generator state")
+            resume_epoch = ckpt.get("epoch", 0)
+            resume_batch = ckpt.get("next_batch", 0)
+            logging.info(
+                "Resume data position at epoch=%s batch=%s",
+                resume_epoch,
+                resume_batch,
+            )
 
         elif args.restore_ckpt is not None:
             assert args.restore_ckpt.endswith(".pth") or args.restore_ckpt.endswith(
@@ -501,14 +672,48 @@ class Lite(LightningLite):
         # model.cuda()
         model.train()
 
+        def save_training_checkpoint(epoch_index, next_batch_index):
+            ckpt_iter = str(total_steps).zfill(8)
+            save_path = Path(
+                f"{args.ckpt_path}/model_{args.model_name}_{ckpt_iter}.pth"
+            )
+            temporary_path = save_path.with_suffix(".pth.tmp")
+            save_dict = {
+                "model": _unwrap_model(model).state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "total_steps": total_steps,
+                "epoch": epoch_index,
+                "next_batch": next_batch_index,
+                "teacher_sampler": teacher_sampler.state_dict(),
+                "rng_state": _capture_rng_state(),
+                "experiment": vars(args),
+            }
+            logging.info(f"Saving atomic checkpoint {save_path}")
+            self.save(save_dict, temporary_path)
+            os.replace(temporary_path, save_path)
+            latest_path = Path(args.ckpt_path) / "latest_checkpoint.txt"
+            latest_tmp = latest_path.with_suffix(".tmp")
+            latest_tmp.write_text(save_path.name + "\n", encoding="utf-8")
+            os.replace(latest_tmp, latest_path)
+            checkpoints = sorted(
+                Path(args.ckpt_path).glob(f"model_{args.model_name}_*.pth")
+            )
+            for obsolete in checkpoints[: -args.keep_last_checkpoints]:
+                obsolete.unlink()
+
         save_freq = args.save_freq
         scaler = GradScaler(enabled=False)
 
         should_keep_training = True
         global_batch_num = 0
-        epoch = -1
+        epoch = resume_epoch - 1
 
-        if self.global_rank == 0 and args.validate_at_start:
+        if (
+            self.global_rank == 0
+            and args.validate_at_start
+            and not args.skip_evaluation
+        ):
             run_test_eval(
                 evaluator,
                 model,
@@ -519,9 +724,15 @@ class Lite(LightningLite):
             model.train()
             torch.cuda.empty_cache()
 
+        if total_steps >= args.num_steps:
+            should_keep_training = False
+
         while should_keep_training:
             epoch += 1
+            g.manual_seed(args.seed + epoch)
             for i_batch, batch in enumerate(tqdm(train_loader)):
+                if epoch == resume_epoch and i_batch < resume_batch:
+                    continue
                 batch, gotit = batch
                 if not all(gotit):
                     print("batch is None")
@@ -533,7 +744,11 @@ class Lite(LightningLite):
                 assert model.training
 
                 output = forward_batch(
-                    batch, model, args, teacher_models=teacher_models
+                    batch,
+                    model,
+                    args,
+                    teacher_models=teacher_models,
+                    teacher_sampler=teacher_sampler,
                 )
 
                 loss = 0
@@ -577,6 +792,43 @@ class Lite(LightningLite):
                     logger.writer.add_scalar(
                         f"learning_rate", optimizer.param_groups[0]["lr"], total_steps
                     )
+                    teacher_info = output["teacher_sampling"]
+                    if total_steps % args.teacher_log_every == 0:
+                        logging.info(
+                            "experiment=%s step=%d primary=%s auxiliary=%s alpha=%.4f primary_loss=%.6f auxiliary_loss=%s",
+                            args.experiment_name,
+                            total_steps,
+                            teacher_models[teacher_info["primary_index"]][0],
+                            (
+                                "none"
+                                if teacher_info["auxiliary_index"] is None
+                                else teacher_models[teacher_info["auxiliary_index"]][0]
+                            ),
+                            args.auxiliary_teacher_weight,
+                            teacher_info["primary_loss_value"],
+                            teacher_info["auxiliary_loss_value"],
+                        )
+                    logger.writer.add_scalar(
+                        "teacher/primary_index",
+                        teacher_info["primary_index"],
+                        total_steps,
+                    )
+                    logger.writer.add_scalar(
+                        "teacher/primary_loss",
+                        teacher_info["primary_loss_value"],
+                        total_steps,
+                    )
+                    if teacher_info["auxiliary_index"] is not None:
+                        logger.writer.add_scalar(
+                            "teacher/auxiliary_index",
+                            teacher_info["auxiliary_index"],
+                            total_steps,
+                        )
+                        logger.writer.add_scalar(
+                            "teacher/auxiliary_loss",
+                            teacher_info["auxiliary_loss_value"],
+                            total_steps,
+                        )
                     global_batch_num += 1
 
                 self.barrier()
@@ -591,26 +843,19 @@ class Lite(LightningLite):
                 scaler.update()
                 total_steps += 1
                 if self.global_rank == 0:
+                    if (
+                        args.save_every_n_steps > 0
+                        and total_steps % args.save_every_n_steps == 0
+                    ):
+                        save_training_checkpoint(epoch, i_batch + 1)
                     if i_batch >= len(train_loader) - 1:
                         if (epoch + 1) % args.save_every_n_epoch == 0:
-                            ckpt_iter = "0" * (6 - len(str(total_steps))) + str(
-                                total_steps
-                            )
-                            save_path = Path(
-                                f"{args.ckpt_path}/model_{args.model_name}_{ckpt_iter}.pth"
-                            )
+                            save_training_checkpoint(epoch + 1, 0)
 
-                            save_dict = {
-                                "model": model.module.module.state_dict(),
-                                "optimizer": optimizer.state_dict(),
-                                "scheduler": scheduler.state_dict(),
-                                "total_steps": total_steps,
-                            }
-
-                            logging.info(f"Saving file {save_path}")
-                            self.save(save_dict, save_path)
-
-                        if (epoch + 1) % args.evaluate_every_n_epoch == 0:
+                        if (
+                            not args.skip_evaluation
+                            and (epoch + 1) % args.evaluate_every_n_epoch == 0
+                        ):
                             run_test_eval(
                                 evaluator,
                                 model,
@@ -622,17 +867,18 @@ class Lite(LightningLite):
                             torch.cuda.empty_cache()
 
                 self.barrier()
-                if total_steps > args.num_steps:
+                if total_steps >= args.num_steps:
                     should_keep_training = False
                     break
         if self.global_rank == 0:
             print("FINISHED TRAINING")
 
             PATH = f"{args.ckpt_path}/{args.model_name}_final.pth"
-            torch.save(model.module.module.state_dict(), PATH)
-            run_test_eval(
-                evaluator, model, final_dataloaders, logger.writer, total_steps
-            )
+            torch.save(_unwrap_model(model).state_dict(), PATH)
+            if not args.skip_evaluation:
+                run_test_eval(
+                    evaluator, model, final_dataloaders, logger.writer, total_steps
+                )
             logger.close()
 
 
@@ -641,6 +887,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, term_handler)
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", default="cotracker_three", help="model name")
+    parser.add_argument(
+        "--experiment_name", default="random_tutor", help="audit label stored in logs"
+    )
     parser.add_argument("--restore_ckpt", help="path to restore a checkpoint")
     parser.add_argument("--ckpt_path", help="path to save checkpoints")
     parser.add_argument(
@@ -674,6 +923,18 @@ if __name__ == "__main__":
         help="save checkpoints during training after every n epochs, after every epoch by default",
     )
     parser.add_argument(
+        "--save_every_n_steps",
+        type=int,
+        default=50,
+        help="atomically save optimizer and teacher-sampler state every N steps; 0 disables",
+    )
+    parser.add_argument(
+        "--keep_last_checkpoints",
+        type=int,
+        default=3,
+        help="retain the newest N resumable checkpoints to bound disk usage",
+    )
+    parser.add_argument(
         "--validate_at_start",
         action="store_true",
         help="whether to run evaluation before training starts",
@@ -692,6 +953,69 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--dataset_root", type=str, help="path lo all the datasets (train and eval)"
+    )
+    parser.add_argument(
+        "--trackrad_data_dir",
+        type=str,
+        default=None,
+        help="TrackRAD case directory containing */images/*_frames.mha",
+    )
+    parser.add_argument(
+        "--skip_evaluation",
+        action="store_true",
+        help="skip TapVid evaluation when only TrackRAD training data is mounted",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="global training seed")
+    parser.add_argument(
+        "--teacher_seed",
+        type=int,
+        default=20260829,
+        help="independent, checkpointed teacher-sampling seed",
+    )
+    parser.add_argument(
+        "--teacher_log_every",
+        type=int,
+        default=1,
+        help="write selected teacher names and losses every N optimizer steps",
+    )
+    parser.add_argument(
+        "--auxiliary_teacher_weight",
+        type=float,
+        default=0.0,
+        help="normalized tutor-teacher weight alpha in [0, 0.5]",
+    )
+    parser.add_argument(
+        "--same_teacher_control",
+        action="store_true",
+        help="use the primary teacher as tutor; should reproduce the baseline objective",
+    )
+    parser.add_argument(
+        "--teacher_types",
+        nargs="+",
+        choices=[
+            "cotracker2v1",
+            "online_cotracker_three",
+            "offline_cotracker_three",
+            "tapir",
+        ],
+        default=[
+            "cotracker2v1",
+            "online_cotracker_three",
+            "offline_cotracker_three",
+        ],
+        help="teacher pool sampled once (baseline) or twice (random tutor) per batch",
+    )
+    parser.add_argument(
+        "--teacher_cotracker2_ckpt",
+        default="./checkpoints/cotracker2v1.pth",
+    )
+    parser.add_argument(
+        "--teacher_online_ckpt",
+        default="./checkpoints/baseline_online.pth",
+    )
+    parser.add_argument(
+        "--teacher_offline_ckpt",
+        default="./checkpoints/baseline_offline.pth",
     )
 
     parser.add_argument(
@@ -831,6 +1155,18 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if not 0.0 <= args.auxiliary_teacher_weight <= 0.5:
+        parser.error("--auxiliary_teacher_weight must be in [0, 0.5]")
+    if args.same_teacher_control and args.auxiliary_teacher_weight == 0.0:
+        parser.error("--same_teacher_control requires a positive auxiliary weight")
+    if args.teacher_log_every < 1:
+        parser.error("--teacher_log_every must be positive")
+    if args.keep_last_checkpoints < 1:
+        parser.error("--keep_last_checkpoints must be positive")
+    if args.trackrad_data_dir and not args.skip_evaluation and not args.dataset_root:
+        parser.error(
+            "TrackRAD-only training requires --skip_evaluation or a TapVid --dataset_root"
+        )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s",

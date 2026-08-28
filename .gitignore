@@ -38,6 +38,8 @@ scripts/upload_dataset.ipynb
 
 # Results are ignored as they are not to be made public until the end of the challenge
 results/
+training-checkpoints/
+random-tutor-training-results/
 
 # Proprietary 1.5 T and 0.35 T MRI-linac cine MRI data formats
 *.dump

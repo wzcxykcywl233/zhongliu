@@ -10,6 +10,7 @@ version = "0.1.0"
 [environments]
 default = ["cpu"]
 cuda = ["cuda"]
+training = ["cuda", "training"]
 
 [dependencies]
 python = ">=3.10.18,<3.14"
@@ -37,3 +38,10 @@ system-requirements = { cuda = "12.0" }
 
 [feature.cuda.dependencies]
 pytorch-gpu = "*"
+
+[feature.training.dependencies]
+python = ">=3.10,<3.12"
+pytorch-lightning = "==1.9.5"
+tensorboard = "*"
+torchvision = "*"
+imageio-ffmpeg = "*"

@@ -21,6 +21,19 @@ DATASET_DIR="${DATASET_DIR_OVERRIDE:-./dataset/labeled}"
 RESUME_DIR="${TRACKRAD_RESUME_DIR:?TRACKRAD_RESUME_DIR is required}"
 GROUND_TRUTH_PATH="$DATASET_DIR"
 PROFILE="${COTRACKER_EXPERIMENT:-baseline}"
+CHECKPOINT_OVERRIDE="${COTRACKER_CHECKPOINT_OVERRIDE:-}"
+checkpoint_args=()
+if [ -n "$CHECKPOINT_OVERRIDE" ]; then
+  CHECKPOINT_OVERRIDE=$(realpath "$CHECKPOINT_OVERRIDE")
+  if [ ! -s "$CHECKPOINT_OVERRIDE" ]; then
+    echo "Checkpoint override is missing or empty: $CHECKPOINT_OVERRIDE" >&2
+    exit 2
+  fi
+  checkpoint_args=(
+    --env COTRACKER_CHECKPOINT=/opt/checkpoint/model.pth
+    --volume "$CHECKPOINT_OVERRIDE":/opt/checkpoint/model.pth:ro
+  )
+fi
 
 mkdir -p "$RESUME_DIR" "$RESUME_DIR/.attempts" "$RESUME_DIR/jobs" "$RESUME_DIR/evaluation"
 RESUME_DIR=$(cd "$RESUME_DIR" && pwd -P)
@@ -86,6 +99,7 @@ for case_folder in "${case_folders[@]}"; do
     --network none \
     --gpus all \
     --env COTRACKER_EXPERIMENT="$PROFILE" \
+    "${checkpoint_args[@]}" \
     --volume "$case_folder/frame-rate.json":/input/frame-rate.json:ro \
     --volume "$case_folder/b-field-strength.json":/input/b-field-strength.json:ro \
     --volume "$case_folder/scanned-region.json":/input/scanned-region.json:ro \
