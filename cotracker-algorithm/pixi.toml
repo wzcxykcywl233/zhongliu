@@ -41,7 +41,7 @@ pytorch-gpu = "*"
 
 [feature.training.dependencies]
 python = ">=3.10,<3.12"
-pytorch-lightning = "==1.9.5"
+pytorch-lightning = "==1.9.4"
 tensorboard = "*"
 torchvision = "*"
 imageio-ffmpeg = "*"
