@@ -7,33 +7,12 @@ param(
     [string[]]$Profiles = @()
 )
 
-$ErrorActionPreference = "Stop"
-foreach ($Path in @($RepoRoot, $DatasetDir, $TrainingRoot)) {
-    if (-not (Test-Path $Path)) { throw "Path not found: $Path" }
+$NativeRunner = Join-Path $PSScriptRoot "evaluate_random_tutor_models_native.ps1"
+$Arguments = @{
+    RepoRoot = $RepoRoot
+    DatasetDir = $DatasetDir
+    TrainingRoot = $TrainingRoot
+    EvaluationRoot = $EvaluationRoot
 }
-New-Item -ItemType Directory -Force -Path $EvaluationRoot | Out-Null
-
-function Convert-ToWslPath([string]$WindowsPath) {
-    $FullPath = [System.IO.Path]::GetFullPath($WindowsPath)
-    if ($FullPath -notmatch '^([A-Za-z]):\\(.*)$') {
-        throw "Expected an absolute Windows drive path: $WindowsPath"
-    }
-    $Drive = $Matches[1].ToLowerInvariant()
-    $RelativePath = $Matches[2].Replace('\', '/')
-    return "/mnt/$Drive/$RelativePath"
-}
-
-$WslRepo = Convert-ToWslPath $RepoRoot
-$Arguments = @(
-    "-d", "Ubuntu", "--", "bash",
-    "$WslRepo/scripts/evaluate_random_tutor_models.sh",
-    $WslRepo,
-    (Convert-ToWslPath $DatasetDir),
-    (Convert-ToWslPath $TrainingRoot),
-    (Convert-ToWslPath $EvaluationRoot)
-)
-$Arguments += $Profiles
-& wsl.exe @Arguments
-if ($LASTEXITCODE -ne 0) {
-    throw "Evaluation failed with exit code $LASTEXITCODE; rerun to resume completed cases."
-}
+if ($Profiles.Count -gt 0) { $Arguments.Profiles = $Profiles }
+& $NativeRunner @Arguments
