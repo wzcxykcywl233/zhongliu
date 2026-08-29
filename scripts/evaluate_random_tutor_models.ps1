@@ -14,9 +14,13 @@ foreach ($Path in @($RepoRoot, $DatasetDir, $TrainingRoot)) {
 New-Item -ItemType Directory -Force -Path $EvaluationRoot | Out-Null
 
 function Convert-ToWslPath([string]$WindowsPath) {
-    $Converted = & wsl.exe -d Ubuntu -- wslpath -a $WindowsPath
-    if ($LASTEXITCODE -ne 0) { throw "wslpath failed: $WindowsPath" }
-    return $Converted.Trim()
+    $FullPath = [System.IO.Path]::GetFullPath($WindowsPath)
+    if ($FullPath -notmatch '^([A-Za-z]):\\(.*)$') {
+        throw "Expected an absolute Windows drive path: $WindowsPath"
+    }
+    $Drive = $Matches[1].ToLowerInvariant()
+    $RelativePath = $Matches[2].Replace('\', '/')
+    return "/mnt/$Drive/$RelativePath"
 }
 
 $WslRepo = Convert-ToWslPath $RepoRoot
