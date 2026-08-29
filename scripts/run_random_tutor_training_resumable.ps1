@@ -5,6 +5,9 @@ param(
     [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\random-tutor-training-results",
     [int]$NumSteps = 2000,
     [int]$SaveEverySteps = 25,
+    [ValidateRange(0, 16)]
+    [int]$DataLoaderWorkers = 0,
+    [string]$DockerShmSize = "4g",
     [switch]$ContinueOnFailure,
     [string[]]$Profiles = @(
         "baseline_single_teacher",
@@ -75,13 +78,14 @@ foreach ($Profile in $Profiles) {
     "===== START $Profile $(Get-Date -Format o) =====" | Tee-Object -FilePath $Log -Append
     $DockerArguments = @(
         "run", "--rm", "--gpus", "all",
+        "--shm-size", $DockerShmSize,
         "--mount", "type=bind,source=$DatasetDir,target=/data,readonly",
         "--mount", "type=bind,source=$CheckpointDir,target=/checkpoints,readonly",
         "--mount", "type=bind,source=$ProfileDir,target=/results",
         "--workdir", "/opt/app/ext/co-tracker",
         $Image,
         "--batch_size", "1",
-        "--num_workers", "2",
+        "--num_workers", "$DataLoaderWorkers",
         "--num_steps", "$NumSteps",
         "--ckpt_path", "/results",
         "--model_name", "cotracker_three",
