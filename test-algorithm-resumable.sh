@@ -73,8 +73,10 @@ for case_folder in "${case_folders[@]}"; do
   completed_dir="$RESUME_DIR/jobs/$case_id"
   completed_output="$completed_dir/output/images/mri-linac-series-targets/output.mha"
 
-  if [ -f "$completed_dir/.complete" ] \
-    && [ -f "$completed_dir/prediction.json" ] \
+  # The directory rename below is the atomic commit. On Windows-mounted WSL
+  # filesystems, a freshly-created dotfile can be temporarily invisible even
+  # though the committed directory and its payload are already durable.
+  if [ -f "$completed_dir/prediction.json" ] \
     && [ -s "$completed_output" ]; then
     echo "Checkpoint hit, skipping completed case: $case_id"
     continue
@@ -198,8 +200,14 @@ for case_dir in sorted(jobs_root.iterdir()):
     if not case_dir.is_dir():
         continue
     path = case_dir / "prediction.json"
-    complete_marker = case_dir / ".complete"
-    if not path.is_file() or not complete_marker.is_file():
+    output = (
+        case_dir
+        / "output"
+        / "images"
+        / "mri-linac-series-targets"
+        / "output.mha"
+    )
+    if not path.is_file() or not output.is_file() or output.stat().st_size == 0:
         continue
     predictions.append(json.loads(path.read_text(encoding="utf-8")))
 if not predictions:
