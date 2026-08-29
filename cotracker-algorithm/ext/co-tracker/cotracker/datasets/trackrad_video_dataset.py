@@ -46,18 +46,39 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         self.random_frame_rate = random_frame_rate
 
     @staticmethod
+    def _robust_intensity_bounds(
+        array: np.ndarray,
+        max_samples: int = 1_000_000,
+    ) -> tuple[float, float]:
+        """Estimate deterministic percentiles without sorting a huge tensor."""
+
+        flat = array.reshape(-1)
+        if flat.size > max_samples:
+            stride = int(np.ceil(flat.size / max_samples))
+            flat = flat[::stride]
+        finite = flat[np.isfinite(flat)]
+        if finite.size == 0:
+            return 0.0, 1.0
+        lower, upper = np.percentile(finite, (1.0, 99.0))
+        if upper <= lower:
+            lower = float(finite.min())
+            upper = float(finite.max())
+        if upper <= lower:
+            upper = lower + 1.0
+        return float(lower), float(upper)
+
+    @staticmethod
     def _read_mha(path: Path) -> torch.Tensor:
         import SimpleITK as sitk
 
         array = sitk.GetArrayFromImage(sitk.ReadImage(str(path))).astype(np.float32)
         if array.ndim != 3:
             raise ValueError(f"Expected a 3D TrackRAD video, got {array.shape}: {path}")
+        lower, upper = TrackRADVideoDataset._robust_intensity_bounds(array)
         # SimpleITK reverses the MetaImage dimensions. TrackRAD stores DimSize
         # as T,H,W, therefore GetArrayFromImage returns W,H,T.
         video = torch.from_numpy(np.ascontiguousarray(np.moveaxis(array, -1, 0)))
-        lower = torch.quantile(video, 0.01)
-        upper = torch.quantile(video, 0.99)
-        video = ((video - lower) / (upper - lower).clamp_min(1e-6)).clamp(0, 1)
+        video = ((video - lower) / max(upper - lower, 1e-6)).clamp(0, 1)
         return video.mul(255.0)
 
     def _sample_clip(self, video: torch.Tensor) -> torch.Tensor:
