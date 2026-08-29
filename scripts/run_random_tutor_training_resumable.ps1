@@ -5,6 +5,7 @@ param(
     [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\random-tutor-training-results",
     [int]$NumSteps = 2000,
     [int]$SaveEverySteps = 25,
+    [switch]$ContinueOnFailure,
     [string[]]$Profiles = @(
         "baseline_single_teacher",
         "random_tutor_w0025",
@@ -117,6 +118,9 @@ foreach ($Profile in $Profiles) {
         $Failures += $Profile
         "===== FAILED $Profile exit=$RunExit $(Get-Date -Format o) =====" |
             Tee-Object -FilePath $Log -Append
+        if (-not $ContinueOnFailure) {
+            throw "Profile $Profile failed with exit code $RunExit. Fix the first failure, then rerun to resume."
+        }
         continue
     }
     "===== DONE $Profile $(Get-Date -Format o) =====" |
