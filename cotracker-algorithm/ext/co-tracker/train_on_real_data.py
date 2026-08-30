@@ -383,14 +383,21 @@ def forward_batch(batch, model, args, teacher_models, teacher_sampler):
             auxiliary_loss = primary_loss
         else:
             auxiliary_batch = _clone_teacher_batch(batch)
-            auxiliary_output = _forward_batch_single_teacher(
-                auxiliary_batch,
-                model,
-                args,
-                teacher_models,
-                selection.auxiliary,
-                queries=primary_output["flow"]["queries"],
-            )
+            # The auxiliary branch is the experimental intervention. Preserve
+            # every global RNG stream around it so the next batch, data
+            # augmentation, and primary branch remain paired with baseline.
+            rng_state_before_auxiliary = _capture_rng_state()
+            try:
+                auxiliary_output = _forward_batch_single_teacher(
+                    auxiliary_batch,
+                    model,
+                    args,
+                    teacher_models,
+                    selection.auxiliary,
+                    queries=primary_output["flow"]["queries"],
+                )
+            finally:
+                _restore_rng_state(rng_state_before_auxiliary)
             auxiliary_loss = _sum_output_losses(auxiliary_output)
 
     # Keep primary pseudo labels for visualization and diagnostics.
@@ -401,6 +408,7 @@ def forward_batch(batch, model, args, teacher_models, teacher_sampler):
         primary_loss,
         auxiliary_loss,
         args.auxiliary_teacher_weight,
+        same_teacher_control=args.same_teacher_control,
     )
     # The training loop sums every nested ``loss`` field. Remove the original
     # components and expose exactly one normalized objective.
@@ -580,15 +588,18 @@ class Lite(LightningLite):
             teacher_count=len(teacher_models),
             auxiliary_weight=args.auxiliary_teacher_weight,
             seed=args.teacher_seed + self.global_rank,
+            auxiliary_seed=args.auxiliary_teacher_seed + self.global_rank,
             same_teacher_control=args.same_teacher_control,
         )
         if self.global_rank == 0:
             logging.info(
-                "Experiment %s; teacher pool: %s; auxiliary weight: %.4f; same-teacher control: %s",
+                "Experiment %s; teacher pool: %s; auxiliary weight: %.4f; same-teacher control: %s; primary seed: %d; auxiliary seed: %d",
                 args.experiment_name,
                 [name for name, _ in teacher_models],
                 args.auxiliary_teacher_weight,
                 args.same_teacher_control,
+                args.teacher_seed,
+                args.auxiliary_teacher_seed,
             )
 
         train_loader = DataLoader(
@@ -971,6 +982,12 @@ if __name__ == "__main__":
         type=int,
         default=20260829,
         help="independent, checkpointed teacher-sampling seed",
+    )
+    parser.add_argument(
+        "--auxiliary_teacher_seed",
+        type=int,
+        default=20260830,
+        help="independent, checkpointed auxiliary-teacher sampling seed",
     )
     parser.add_argument(
         "--teacher_log_every",

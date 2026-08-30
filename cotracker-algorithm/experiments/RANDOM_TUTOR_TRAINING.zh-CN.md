@@ -106,3 +106,42 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - 比较前确认 `meta.json` 中只有 `auxiliary_teacher_weight` 或控制开关不同；
 - 保留 `training.log`、自动保留的三个中间断点、最终权重和评估 `metrics.json`；
 - 建议最终候选权重再用三个训练种子复跑，以区分改进与训练随机波动。
+
+## 7. 严格配对复测
+
+预实验的主教师与辅助教师曾共用一个随机数流，辅助采样会改变后续主教师
+顺序。严格复测已经拆分为两个可断点恢复的独立随机流，并在辅助前向后恢复
+Python、NumPy、PyTorch 与 CUDA 随机状态。因此在同一个 seed 内，实验间固定：
+
+- 学生初始权重、数据顺序、数据增强及优化器设置；
+- 每个 batch 的主教师和主查询；
+- 每个非零权重组的辅助教师序列；
+- 总教师损失权重始终归一化为 1。
+
+唯一干预是是否加入辅助教师及其归一化权重。复测权重为 0、0.10、0.15、
+0.20、0.25，并增加权重 0.20 的同教师严格无操作对照。每组使用 seed 0、1、2
+三个配对重复。训练结果写入全新目录，不读取预实验断点。
+训练完成后编排器会自动审计每个 seed 的逐 batch 教师日志；主序列或辅助
+序列任一处不一致都会终止流程，并且不会将该轮标记为受控复测完成。
+
+```powershell
+$Repo = "C:\zhongliu\zhongliu-tuning"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\run_random_tutor_controlled_retest_resumable.ps1" `
+  -RepoRoot $Repo
+```
+
+断电后重新执行同一命令。所有训练完成后：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\evaluate_random_tutor_controlled_retest.ps1" `
+  -RepoRoot $Repo
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\summarize_random_tutor_controlled_retest.ps1"
+```
+
+汇总脚本同时输出逐 seed 数据和均值、样本标准差。若严格同教师对照不能与
+对应 seed 的基线保持一致，应先视为可复现性审计失败，不解释辅助教师效果。

@@ -8,6 +8,9 @@ param(
     [ValidateRange(0, 16)]
     [int]$DataLoaderWorkers = 0,
     [string]$DockerShmSize = "4g",
+    [int]$TrainingSeed = 0,
+    [int]$PrimaryTeacherSeed = 20260829,
+    [int]$AuxiliaryTeacherSeed = 20260830,
     [switch]$ContinueOnFailure,
     [string[]]$Profiles = @(
         "baseline_single_teacher",
@@ -40,8 +43,11 @@ $Definitions = @{
     random_tutor_w0025 = @{ Weight = 0.025; Same = $false }
     random_tutor_w005 = @{ Weight = 0.05; Same = $false }
     random_tutor_w010 = @{ Weight = 0.10; Same = $false }
+    random_tutor_w015 = @{ Weight = 0.15; Same = $false }
     random_tutor_w020 = @{ Weight = 0.20; Same = $false }
+    random_tutor_w025 = @{ Weight = 0.25; Same = $false }
     same_teacher_control_w010 = @{ Weight = 0.10; Same = $true }
+    same_teacher_control_w020 = @{ Weight = 0.20; Same = $true }
 }
 foreach ($Profile in $Profiles) {
     if (-not $Definitions.ContainsKey($Profile)) {
@@ -106,8 +112,9 @@ foreach ($Profile in $Profiles) {
         "--teacher_online_ckpt", "/checkpoints/baseline_online.pth",
         "--teacher_offline_ckpt", "/checkpoints/baseline_offline.pth",
         "--auxiliary_teacher_weight", "$($Definition.Weight)",
-        "--seed", "0",
-        "--teacher_seed", "20260829",
+        "--seed", "$TrainingSeed",
+        "--teacher_seed", "$PrimaryTeacherSeed",
+        "--auxiliary_teacher_seed", "$AuxiliaryTeacherSeed",
         "--teacher_log_every", "1",
         "--lr", "0.00005"
     )
