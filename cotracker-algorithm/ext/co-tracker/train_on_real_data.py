@@ -45,6 +45,11 @@ from cotracker.utils.teacher_sampling import (
     TeacherPairSampler,
     blend_teacher_losses,
 )
+from cotracker.utils.confidence_head_tuning import (
+    configure_confidence_head_only,
+    trainable_parameter_count,
+    trainable_parameter_names,
+)
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -56,14 +61,31 @@ from cotracker.utils.train_utils import (
 
 def fetch_optimizer(args, model):
     """Create the optimizer and learning rate scheduler"""
+    if args.confidence_head_only:
+        parameters = configure_confidence_head_only(model)
+        weight_decay = 0.0
+        print(
+            "Confidence-head-only trainable tensors: "
+            f"{trainable_parameter_names(model)}"
+        )
+        print(
+            "Confidence-head-only optimizer elements (including masked visibility "
+            f"row): {trainable_parameter_count(parameters)}"
+        )
+    else:
+        for name, param in model.named_parameters():
+            if "vis_conf_head" in name:
+                param.requires_grad = False
+        parameters = [
+            parameter for parameter in model.parameters() if parameter.requires_grad
+        ]
+        weight_decay = args.wdecay
+
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total number of parameters: {total_params}")
-    for name, param in model.named_parameters():
-        if "vis_conf_head" in name:
-            param.requires_grad = False
+    print(f"Total number of trainable parameter elements: {total_params}")
 
     optimizer = optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=1e-8
+        parameters, lr=args.lr, weight_decay=weight_decay, eps=1e-8
     )
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -199,20 +221,20 @@ def _forward_batch_single_teacher(
             traj_gts.append(trajs_g[:, ind : ind + S, :, :2])
             valids_gts.append(valids[:, ind : ind + S] * valid_mask[:, ind : ind + S])
 
-        seq_loss = sequence_loss(
-            coord_predictions,
-            traj_gts,
-            valids_gts,
-            vis=vis_gts,
-            gamma=0.8,
-            add_huber_loss=True,
-            loss_only_for_visible=True,
-        )
-
         output = {
             "flow": {"predictions": (tracks[0].detach() * valid_mask[..., None])[0]}
         }
-        output["flow"]["loss"] = seq_loss.mean() * 0.05
+        if not args.confidence_head_only:
+            seq_loss = sequence_loss(
+                coord_predictions,
+                traj_gts,
+                valids_gts,
+                vis=vis_gts,
+                gamma=0.8,
+                add_huber_loss=True,
+                loss_only_for_visible=True,
+            )
+            output["flow"]["loss"] = seq_loss.mean() * 0.05
         output["flow"]["queries"] = queries.clone()
         output["flow"]["query_frame"] = queries[0, :, 0].cpu().int()
 
@@ -233,7 +255,10 @@ def _forward_batch_single_teacher(
             output["confidence"] = {
                 "loss": confidence_loss.mean() * args.confidence_loss_weight,
             }
-        if not (teacher_model_type == "tapir" or args.train_only_visible_points):
+        if (
+            not args.confidence_head_only
+            and not (teacher_model_type == "tapir" or args.train_only_visible_points)
+        ):
             seq_loss_invisible = sequence_loss(
                 coord_predictions,
                 traj_gts,
@@ -1026,6 +1051,14 @@ if __name__ == "__main__":
         help="supervise confidence against the selected teacher trajectory",
     )
     parser.add_argument(
+        "--confidence_head_only",
+        action="store_true",
+        help=(
+            "freeze every student parameter except the confidence output row; "
+            "requires --supervise_confidence and uses confidence loss only"
+        ),
+    )
+    parser.add_argument(
         "--confidence_target_mode",
         choices=["hard", "linear_soft"],
         default="hard",
@@ -1238,6 +1271,13 @@ if __name__ == "__main__":
         )
     if args.confidence_loss_weight < 0:
         parser.error("--confidence_loss_weight must be non-negative")
+    if args.confidence_head_only and not args.supervise_confidence:
+        parser.error("--confidence_head_only requires --supervise_confidence")
+    if args.confidence_head_only and args.auxiliary_teacher_weight != 0.0:
+        parser.error(
+            "--confidence_head_only is an isolated single-teacher ablation and "
+            "requires --auxiliary_teacher_weight 0"
+        )
     if args.keep_last_checkpoints < 1:
         parser.error("--keep_last_checkpoints must be positive")
     if args.trackrad_data_dir and not args.skip_evaluation and not args.dataset_root:
