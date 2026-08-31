@@ -72,18 +72,38 @@ def sequence_prob_loss(
     target_points: torch.Tensor,
     visibility: torch.Tensor,
     expected_dist_thresh: float = 12.0,
+    target_mode: str = "hard",
+    soft_inner_radius: float = 8.0,
+    soft_outer_radius: float = 16.0,
 ):
-    """Loss for classifying if a point is within pixel threshold of its target."""
-    # Points with an error larger than 12 pixels are likely to be useless; marking
-    # them as occluded will actually improve Jaccard metrics and give
-    # qualitatively better results.
+    """BCE for a hard or piecewise-linear confidence target based on point error."""
+    if target_mode not in {"hard", "linear_soft"}:
+        raise ValueError("target_mode must be 'hard' or 'linear_soft'")
+    if expected_dist_thresh <= 0:
+        raise ValueError("expected_dist_thresh must be positive")
+    if soft_inner_radius < 0 or soft_outer_radius <= soft_inner_radius:
+        raise ValueError(
+            "soft confidence radii must satisfy 0 <= inner < outer"
+        )
+
+    # The original target is binary at 12 pixels.  Linear soft targets preserve
+    # the same midpoint while avoiding a discontinuity around that boundary.
     total_logprob_loss = 0.0
     for j in range(len(tracks)):
         n_predictions = len(tracks[j])
         logprob_loss = 0.0
         for i in range(n_predictions):
             err = torch.sum((tracks[j][i].detach() - target_points[j]) ** 2, dim=-1)
-            valid = (err <= expected_dist_thresh**2).float()
+            if target_mode == "hard":
+                valid = (err <= expected_dist_thresh**2).float()
+            else:
+                distance = torch.sqrt(torch.clamp(err, min=0.0))
+                valid = torch.clamp(
+                    (soft_outer_radius - distance)
+                    / (soft_outer_radius - soft_inner_radius),
+                    min=0.0,
+                    max=1.0,
+                )
             logprob = F.binary_cross_entropy(confidence[j][i], valid, reduction="none")
             logprob *= visibility[j]
             logprob = torch.mean(logprob, dim=[1, 2])

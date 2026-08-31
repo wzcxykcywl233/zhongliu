@@ -198,7 +198,14 @@ def forward_batch(batch, model, args):
         loss_only_for_visible=True,
     )
     confidence_loss = sequence_prob_loss(
-        coord_predictions, confidence_predicitons, traj_gts, vis_gts
+        coord_predictions,
+        confidence_predicitons,
+        traj_gts,
+        vis_gts,
+        expected_dist_thresh=args.confidence_distance_threshold,
+        target_mode=args.confidence_target_mode,
+        soft_inner_radius=args.confidence_inner_radius,
+        soft_outer_radius=args.confidence_outer_radius,
     )
     vis_loss = sequence_BCE_loss(vis_predictions, vis_gts)
 
@@ -687,8 +694,28 @@ if __name__ == "__main__":
         action="store_true",
         help="stride of the CoTracker feature network",
     )
+    parser.add_argument(
+        "--confidence_target_mode",
+        choices=["hard", "linear_soft"],
+        default="hard",
+        help="hard radius target or piecewise-linear soft confidence target",
+    )
+    parser.add_argument(
+        "--confidence_distance_threshold", type=float, default=12.0
+    )
+    parser.add_argument("--confidence_inner_radius", type=float, default=8.0)
+    parser.add_argument("--confidence_outer_radius", type=float, default=16.0)
 
     args = parser.parse_args()
+    if args.confidence_distance_threshold <= 0:
+        parser.error("--confidence_distance_threshold must be positive")
+    if (
+        args.confidence_inner_radius < 0
+        or args.confidence_outer_radius <= args.confidence_inner_radius
+    ):
+        parser.error(
+            "confidence radii must satisfy 0 <= inner radius < outer radius"
+        )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s",

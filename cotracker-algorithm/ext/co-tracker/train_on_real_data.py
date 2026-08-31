@@ -39,7 +39,7 @@ from cotracker.models.core.model_utils import (
     get_sift_sampled_pts,
     get_superpoint_sampled_pts,
 )
-from cotracker.models.core.cotracker.losses import sequence_loss
+from cotracker.models.core.cotracker.losses import sequence_loss, sequence_prob_loss
 from cotracker.models.build_cotracker import build_cotracker
 from cotracker.utils.teacher_sampling import (
     TeacherPairSampler,
@@ -219,6 +219,20 @@ def _forward_batch_single_teacher(
         output["visibility"] = {
             "predictions": visibility[0].detach(),
         }
+        if args.supervise_confidence:
+            confidence_loss = sequence_prob_loss(
+                coord_predictions,
+                confidence_predicitons,
+                traj_gts,
+                vis_gts,
+                expected_dist_thresh=args.confidence_distance_threshold,
+                target_mode=args.confidence_target_mode,
+                soft_inner_radius=args.confidence_inner_radius,
+                soft_outer_radius=args.confidence_outer_radius,
+            )
+            output["confidence"] = {
+                "loss": confidence_loss.mean() * args.confidence_loss_weight,
+            }
         if not (teacher_model_type == "tapir" or args.train_only_visible_points):
             seq_loss_invisible = sequence_loss(
                 coord_predictions,
@@ -1007,6 +1021,41 @@ if __name__ == "__main__":
         help="use the primary teacher as tutor; should reproduce the baseline objective",
     )
     parser.add_argument(
+        "--supervise_confidence",
+        action="store_true",
+        help="supervise confidence against the selected teacher trajectory",
+    )
+    parser.add_argument(
+        "--confidence_target_mode",
+        choices=["hard", "linear_soft"],
+        default="hard",
+        help="hard radius target or piecewise-linear soft confidence target",
+    )
+    parser.add_argument(
+        "--confidence_distance_threshold",
+        type=float,
+        default=12.0,
+        help="positive hard-label distance threshold in pixels",
+    )
+    parser.add_argument(
+        "--confidence_inner_radius",
+        type=float,
+        default=8.0,
+        help="distance at or below which a soft confidence target equals one",
+    )
+    parser.add_argument(
+        "--confidence_outer_radius",
+        type=float,
+        default=16.0,
+        help="distance at or above which a soft confidence target equals zero",
+    )
+    parser.add_argument(
+        "--confidence_loss_weight",
+        type=float,
+        default=1.0,
+        help="non-negative multiplier applied to confidence BCE",
+    )
+    parser.add_argument(
         "--teacher_types",
         nargs="+",
         choices=[
@@ -1178,6 +1227,17 @@ if __name__ == "__main__":
         parser.error("--same_teacher_control requires a positive auxiliary weight")
     if args.teacher_log_every < 1:
         parser.error("--teacher_log_every must be positive")
+    if args.confidence_distance_threshold <= 0:
+        parser.error("--confidence_distance_threshold must be positive")
+    if (
+        args.confidence_inner_radius < 0
+        or args.confidence_outer_radius <= args.confidence_inner_radius
+    ):
+        parser.error(
+            "confidence radii must satisfy 0 <= inner radius < outer radius"
+        )
+    if args.confidence_loss_weight < 0:
+        parser.error("--confidence_loss_weight must be non-negative")
     if args.keep_last_checkpoints < 1:
         parser.error("--keep_last_checkpoints must be positive")
     if args.trackrad_data_dir and not args.skip_evaluation and not args.dataset_root:
