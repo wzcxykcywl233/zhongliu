@@ -25,11 +25,17 @@ foreach ($Profile in $Profiles) {
         throw "Missing training log: $LogPath"
     }
 
+    # Docker progress output can insert carriage returns that split a logical
+    # logging record into several PowerShell lines. Parse the complete payload
+    # with a bounded expression instead of relying on line boundaries.
+    $RawLog = Get-Content -LiteralPath $LogPath -Raw
     $ByStep = @{}
-    foreach ($Line in Get-Content -LiteralPath $LogPath) {
-        if ($Line -match 'experiment=\S+ step=(\d+) primary=(\S+) auxiliary=(\S+)') {
-            $ByStep[[int]$Matches[1]] = $Matches[2]
-        }
+    $LogMatches = [regex]::Matches(
+        $RawLog,
+        'step=(\d+)[\s\S]{0,500}?primary=([A-Za-z0-9_]+)'
+    )
+    foreach ($LogMatch in $LogMatches) {
+        $ByStep[[int]$LogMatch.Groups[1].Value] = $LogMatch.Groups[2].Value
     }
     $Sequence = @(
         for ($Step = 0; $Step -lt $NumSteps; $Step++) {
@@ -42,7 +48,11 @@ foreach ($Profile in $Profiles) {
     $SequenceText = $Sequence -join "`n"
     $Bytes = [System.Text.Encoding]::UTF8.GetBytes($SequenceText)
     $Hasher = [System.Security.Cryptography.SHA256]::Create()
-    try { $SequenceHash = [Convert]::ToHexString($Hasher.ComputeHash($Bytes)) }
+    try {
+        $SequenceHash = (
+            [BitConverter]::ToString($Hasher.ComputeHash($Bytes))
+        ).Replace("-", "")
+    }
     finally { $Hasher.Dispose() }
 
     if ($null -eq $Reference) {

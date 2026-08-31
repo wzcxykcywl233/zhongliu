@@ -50,3 +50,28 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - `confidence-label-evaluation-results\confidence-label-deltas-vs-hard.csv`
 
 DSC、D98 越大越好；HD95、MASD、CD 越小越好。
+
+## 三种子配对复测
+
+首次实验作为 seed 0，仅新增 seed 1 和 seed 2。为控制训练时间，复测只保留硬标签和首次表现最好的 `soft_6_18`。每个种子内部的两组使用完全一致的教师序列。
+
+```powershell
+$Repo = "C:\zhongliu\zhongliu-tuning"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\run_confidence_label_controlled_retest_resumable.ps1" `
+  -RepoRoot $Repo
+```
+
+新增两种子训练完成后统一评估和汇总：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\evaluate_confidence_label_controlled_retest.ps1" `
+  -RepoRoot $Repo
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "$Repo\scripts\summarize_confidence_label_controlled_retest.ps1"
+```
+
+汇总脚本会输出三种子的逐种子结果、均值与样本标准差、逐种子配对差值，以及配对差值的均值与样本标准差。

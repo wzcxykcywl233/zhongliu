@@ -1,12 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$RepoRoot = "",
     [string]$DatasetDir = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_training_data",
     [string]$TrainingRoot = "C:\zhongliu\zhongliu-tuning\confidence-label-training-results",
     [string]$EvaluationRoot = "C:\zhongliu\zhongliu-tuning\confidence-label-evaluation-results"
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+}
 $Profiles = @(
     "confidence_hard_12",
     "confidence_soft_8_16",

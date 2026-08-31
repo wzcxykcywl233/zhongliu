@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$RepoRoot = "",
     [string]$DatasetDir = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_training_data",
     [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\confidence-label-training-results",
     [int]$NumSteps = 1000,
@@ -20,6 +20,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = Split-Path -Parent $PSScriptRoot
+}
 
 if ($NumSteps -lt 1) { throw "NumSteps must be positive" }
 if ($SaveEverySteps -lt 1) { throw "SaveEverySteps must be positive" }
