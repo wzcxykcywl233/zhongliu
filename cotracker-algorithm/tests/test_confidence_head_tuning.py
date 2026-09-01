@@ -10,6 +10,7 @@ sys.path.insert(0, str(EXT_ROOT))
 
 from cotracker.utils.confidence_head_tuning import (  # noqa: E402
     configure_confidence_head_only,
+    configure_confidence_updateformer,
     trainable_parameter_names,
 )
 
@@ -70,6 +71,20 @@ class ConfidenceHeadTuningTests(unittest.TestCase):
         self.assertFalse(
             torch.equal(model.updateformer.vis_conf_head.weight[1], before_weight[1])
         )
+
+    def test_updateformer_mode_keeps_coordinate_head_frozen(self):
+        model = _TinyModel()
+        model.updateformer.flow_head = torch.nn.Linear(3, 2)
+        shared, head = configure_confidence_updateformer(model)
+        names = trainable_parameter_names(model)
+
+        self.assertIn("updateformer.backbone.weight", names)
+        self.assertIn("updateformer.vis_conf_head.weight", names)
+        self.assertNotIn("updateformer.flow_head.weight", names)
+        self.assertNotIn("encoder.weight", names)
+        self.assertGreater(len(shared), 0)
+        self.assertIs(head[0], model.updateformer.vis_conf_head.weight)
+        self.assertIs(head[1], model.updateformer.vis_conf_head.bias)
 
 
 if __name__ == "__main__":

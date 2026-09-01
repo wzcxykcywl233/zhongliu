@@ -25,7 +25,11 @@ def _state_dict(path: Path) -> dict[str, torch.Tensor]:
     return value
 
 
-def audit(base_path: Path, tuned_path: Path) -> dict[str, object]:
+def audit(
+    base_path: Path, tuned_path: Path, scope: str = "head"
+) -> dict[str, object]:
+    if scope not in ("head", "updateformer"):
+        raise ValueError(f"unsupported audit scope: {scope}")
     base = _state_dict(base_path)
     tuned = _state_dict(tuned_path)
     if set(base) != set(tuned):
@@ -43,12 +47,20 @@ def audit(base_path: Path, tuned_path: Path) -> dict[str, object]:
         unequal = base_tensor != tuned_tensor
         if not bool(unequal.any()):
             continue
-        if key not in (ALLOWED_WEIGHT, ALLOWED_BIAS):
+        is_head = key in (ALLOWED_WEIGHT, ALLOWED_BIAS)
+        is_shared_updateformer = (
+            scope == "updateformer"
+            and key.startswith("updateformer.")
+            and not key.startswith("updateformer.flow_head.")
+            and not key.startswith("updateformer.vis_conf_head.")
+        )
+        if not is_head and not is_shared_updateformer:
             raise AssertionError(f"forbidden parameter changed: {key}")
-        forbidden = unequal.clone()
-        forbidden[CONFIDENCE_ROW] = False
-        if bool(forbidden.any()):
-            raise AssertionError(f"visibility row changed: {key}")
+        if is_head:
+            forbidden = unequal.clone()
+            forbidden[CONFIDENCE_ROW] = False
+            if bool(forbidden.any()):
+                raise AssertionError(f"visibility row changed: {key}")
         changed.append(key)
         changed_elements += int(unequal.sum().item())
         maximum_delta = max(
@@ -58,14 +70,29 @@ def audit(base_path: Path, tuned_path: Path) -> dict[str, object]:
 
     if not changed:
         raise AssertionError("confidence row did not change")
+    if not any(key in (ALLOWED_WEIGHT, ALLOWED_BIAS) for key in changed):
+        raise AssertionError("confidence row did not change")
+    if scope == "updateformer" and not any(
+        key not in (ALLOWED_WEIGHT, ALLOWED_BIAS) for key in changed
+    ):
+        raise AssertionError("shared UpdateFormer parameters did not change")
+    invariant = (
+        "Only row 1 of updateformer.vis_conf_head may change"
+        if scope == "head"
+        else (
+            "Only shared updateformer parameters and row 1 of "
+            "updateformer.vis_conf_head may change; flow_head stays frozen"
+        )
+    )
     return {
         "passed": True,
+        "scope": scope,
         "base_checkpoint": str(base_path),
         "tuned_checkpoint": str(tuned_path),
         "changed_tensors": changed,
         "changed_elements": changed_elements,
         "maximum_absolute_delta": maximum_delta,
-        "invariant": "Only row 1 of updateformer.vis_conf_head may change",
+        "invariant": invariant,
     }
 
 
@@ -74,8 +101,9 @@ def main() -> int:
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--tuned", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--scope", choices=["head", "updateformer"], default="head")
     args = parser.parse_args()
-    result = audit(args.base, args.tuned)
+    result = audit(args.base, args.tuned, scope=args.scope)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_suffix(args.output.suffix + ".tmp")
     temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

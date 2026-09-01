@@ -19,13 +19,19 @@ SPEC.loader.exec_module(AUDIT_MODULE)
 
 
 class ConfidenceHeadCheckpointAuditTests(unittest.TestCase):
-    def _write_pair(self, forbidden_change: bool = False):
+    def _write_pair(
+        self,
+        forbidden_change: bool = False,
+        shared_updateformer_change: bool = False,
+    ):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
         base_path = root / "base.pth"
         tuned_path = root / "tuned.pth"
         base = {
             "encoder.weight": torch.ones(2, 2),
+            "updateformer.input_transform.weight": torch.ones(2, 2),
+            "updateformer.flow_head.weight": torch.ones(2, 2),
             "updateformer.vis_conf_head.weight": torch.ones(2, 3),
             "updateformer.vis_conf_head.bias": torch.ones(2),
         }
@@ -34,6 +40,8 @@ class ConfidenceHeadCheckpointAuditTests(unittest.TestCase):
         tuned["updateformer.vis_conf_head.bias"][1] -= 0.5
         if forbidden_change:
             tuned["encoder.weight"][0, 0] += 1
+        if shared_updateformer_change:
+            tuned["updateformer.input_transform.weight"][0, 0] += 0.125
         torch.save(base, base_path)
         torch.save(tuned, tuned_path)
         return temporary, base_path, tuned_path
@@ -52,6 +60,27 @@ class ConfidenceHeadCheckpointAuditTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(AssertionError, "forbidden parameter"):
                 AUDIT_MODULE.audit(base_path, tuned_path)
+        finally:
+            temporary.cleanup()
+
+    def test_updateformer_scope_accepts_shared_changes(self):
+        temporary, base_path, tuned_path = self._write_pair(
+            shared_updateformer_change=True
+        )
+        try:
+            result = AUDIT_MODULE.audit(base_path, tuned_path, scope="updateformer")
+        finally:
+            temporary.cleanup()
+        self.assertTrue(result["passed"])
+        self.assertIn("updateformer.input_transform.weight", result["changed_tensors"])
+
+    def test_head_scope_rejects_shared_updateformer_changes(self):
+        temporary, base_path, tuned_path = self._write_pair(
+            shared_updateformer_change=True
+        )
+        try:
+            with self.assertRaisesRegex(AssertionError, "forbidden parameter"):
+                AUDIT_MODULE.audit(base_path, tuned_path, scope="head")
         finally:
             temporary.cleanup()
 

@@ -47,6 +47,7 @@ from cotracker.utils.teacher_sampling import (
 )
 from cotracker.utils.confidence_head_tuning import (
     configure_confidence_head_only,
+    configure_confidence_updateformer,
     trainable_parameter_count,
     trainable_parameter_names,
 )
@@ -71,6 +72,21 @@ def fetch_optimizer(args, model):
         print(
             "Confidence-head-only optimizer elements (including masked visibility "
             f"row): {trainable_parameter_count(parameters)}"
+        )
+    elif args.confidence_updateformer:
+        shared_parameters, head_parameters = configure_confidence_updateformer(model)
+        parameters = [
+            {"params": shared_parameters, "weight_decay": args.wdecay},
+            {"params": head_parameters, "weight_decay": 0.0},
+        ]
+        weight_decay = 0.0
+        print(
+            "Confidence-UpdateFormer trainable tensors: "
+            f"{trainable_parameter_names(model)}"
+        )
+        print(
+            "Confidence-UpdateFormer trainable elements: "
+            f"{trainable_parameter_count(shared_parameters + head_parameters)}"
         )
     else:
         for name, param in model.named_parameters():
@@ -224,7 +240,8 @@ def _forward_batch_single_teacher(
         output = {
             "flow": {"predictions": (tracks[0].detach() * valid_mask[..., None])[0]}
         }
-        if not args.confidence_head_only:
+        confidence_only = args.confidence_head_only or args.confidence_updateformer
+        if not confidence_only:
             seq_loss = sequence_loss(
                 coord_predictions,
                 traj_gts,
@@ -256,7 +273,7 @@ def _forward_batch_single_teacher(
                 "loss": confidence_loss.mean() * args.confidence_loss_weight,
             }
         if (
-            not args.confidence_head_only
+            not confidence_only
             and not (teacher_model_type == "tapir" or args.train_only_visible_points)
         ):
             seq_loss_invisible = sequence_loss(
@@ -1059,6 +1076,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--confidence_updateformer",
+        action="store_true",
+        help=(
+            "train shared UpdateFormer representations and the confidence output "
+            "row using confidence loss only; coordinate and visibility heads stay "
+            "frozen"
+        ),
+    )
+    parser.add_argument(
         "--confidence_target_mode",
         choices=["hard", "linear_soft"],
         default="hard",
@@ -1271,12 +1297,19 @@ if __name__ == "__main__":
         )
     if args.confidence_loss_weight < 0:
         parser.error("--confidence_loss_weight must be non-negative")
-    if args.confidence_head_only and not args.supervise_confidence:
-        parser.error("--confidence_head_only requires --supervise_confidence")
-    if args.confidence_head_only and args.auxiliary_teacher_weight != 0.0:
+    confidence_only_modes = int(args.confidence_head_only) + int(
+        args.confidence_updateformer
+    )
+    if confidence_only_modes > 1:
         parser.error(
-            "--confidence_head_only is an isolated single-teacher ablation and "
-            "requires --auxiliary_teacher_weight 0"
+            "--confidence_head_only and --confidence_updateformer are mutually exclusive"
+        )
+    if confidence_only_modes and not args.supervise_confidence:
+        parser.error("confidence-only modes require --supervise_confidence")
+    if confidence_only_modes and args.auxiliary_teacher_weight != 0.0:
+        parser.error(
+            "confidence-only modes are isolated single-teacher ablations and "
+            "require --auxiliary_teacher_weight 0"
         )
     if args.keep_last_checkpoints < 1:
         parser.error("--keep_last_checkpoints must be positive")
