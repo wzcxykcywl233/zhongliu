@@ -1,4 +1,6 @@
 from dataclasses import fields
+import json
+from pathlib import Path
 import unittest
 
 from experiments import (
@@ -188,6 +190,30 @@ class ExperimentTests(unittest.TestCase):
                 dual_anchor_weight=0.5,
                 feature_revalidate_radius=4,
             )
+
+    def test_official_experiment_registry_is_consistent(self) -> None:
+        registry_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "experiment-status.json"
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        official = set(registry["official_combination_profiles"])
+        candidates = set(registry["official_candidates"].values())
+        excluded = set(registry["exploratory_excluded"])
+
+        self.assertEqual(official, {
+            "hierarchical_feat05_grid0",
+            "hierarchical_feat05_iterations2",
+            "hierarchical_feat05_grid0_iterations2",
+            "hierarchical_full_grid0",
+            "hierarchical_full_iterations2",
+            "hierarchical_full_grid0_iterations2",
+        })
+        self.assertTrue(candidates <= official)
+        self.assertTrue(official <= set(HIERARCHICAL_EXPERIMENTS))
+        self.assertFalse(official & excluded)
+        self.assertFalse(registry["policy"]["include_exploratory_in_official_ranking"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # 原始 CoTracker3 基线的置信度单点调优
 
+> **状态：探索性、已搁置。** 本系列只用于判断输出行微调是否可能影响迭代追踪，不纳入正式实验流程、正式排名或报告主结果表。正式主线见 `EXPERIMENT_STATUS.zh-CN.md`。
+
 ## 为什么要重做
 
 此前的 `confidence_hard_12` 与 `confidence_soft_6_18` 会通过共享网络参数间接改变坐标预测，因此它们不是“只调整置信度”的单点实验。本实验重新从未经 TrackRAD 微调的 `scaled_offline.pth` 出发，把可训练范围严格限制为 `updateformer.vis_conf_head` 的置信度输出行。

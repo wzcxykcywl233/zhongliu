@@ -1,5 +1,7 @@
 # TrackRAD CoTracker3 单点调优说明
 
+> **正式实验状态：** 当前主线已回到通过 50 病例统一评估验证的分级特征记忆组合。置信度硬/软标签训练与随机辅助教师系列仅作为探索性尝试，不参与正式排名和报告主结果。正式候选、排除清单及组合结果见 [EXPERIMENT_STATUS.zh-CN.md](EXPERIMENT_STATUS.zh-CN.md) 和 `experiment-status.json`。
+
 本目录提供一组互相独立的推理期调优。默认 `baseline` 完全保留原提交的
 关键参数：1000 个边界点、10x10 支撑网格、4 次迭代、不使用可见性或
 置信度筛选、直接将有序边界点填充为掩膜。
@@ -218,6 +220,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
 结果写入 `hierarchical-combination-results`。每个病例仅在输出、预测元数据和
 诊断记录完整后原子提交；断电后重新执行同一命令即可跳过已完成病例。脚本
 不启用 `temporal_stride=2`、特征门控或邻域重校验，以保持组合变量可归因。
+
+六组结果完成后，正式主候选确定为 `hierarchical_feat05_grid0`；
+`hierarchical_full_grid0` 作为几何精度候选，
+`hierarchical_feat05_grid0_iterations2` 作为轻量候选。后续正式组合应从这三组
+出发，不再把置信度标签训练或辅助教师训练结果混入本节。
 
 ## 全量可审计复验
 

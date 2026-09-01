@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "official_track": "inference_hierarchical_combinations",
+  "official_candidates": {
+    "primary": "hierarchical_feat05_grid0",
+    "geometry": "hierarchical_full_grid0",
+    "efficient": "hierarchical_feat05_grid0_iterations2"
+  },
+  "official_combination_profiles": [
+    "hierarchical_feat05_grid0",
+    "hierarchical_feat05_iterations2",
+    "hierarchical_feat05_grid0_iterations2",
+    "hierarchical_full_grid0",
+    "hierarchical_full_iterations2",
+    "hierarchical_full_grid0_iterations2"
+  ],
+  "exploratory_excluded": [
+    "confidence_hard_12",
+    "confidence_soft_8_16",
+    "confidence_soft_6_18",
+    "confidence_head_hard_12",
+    "confidence_head_soft_6_18",
+    "confidence_updateformer_soft_6_18",
+    "baseline_single_teacher",
+    "random_tutor_w0025",
+    "random_tutor_w005",
+    "random_tutor_w010",
+    "random_tutor_w015",
+    "random_tutor_w020",
+    "random_tutor_w025",
+    "same_teacher_control_w010",
+    "same_teacher_control_w020"
+  ],
+  "policy": {
+    "include_exploratory_in_official_ranking": false,
+    "include_exploratory_in_main_report_tables": false,
+    "retain_code_and_results_for_traceability": true
+  }
+}
