@@ -62,3 +62,30 @@ Results are written to `public-test-38-results`, including
 `public-test-38-results.csv` and
 `public-test-38-deltas-vs-baseline.csv`. This public test set must not be used
 for further parameter selection or training.
+
+### Establish the 40/10/38 protocol
+
+Create a deterministic patient-level 40/10 split from the 50 labeled training
+cases while keeping the 38 public test cases separate:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\prepare_trackrad_40_10_38.ps1
+```
+
+The split preserves fixed A/B/C validation quotas (5/3/2) and approximately
+stratifies anatomical regions within each cohort. It uses hard links and writes
+the complete assignment to `trackrad-40-10-split.json`.
+
+The existing non-trainable inference profiles do not consume the 40-case
+training split. Re-evaluate their fixed queue on the 10-case validation split
+with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_validation_10_resumable.ps1
+```
+
+Future trainable methods such as a Mamba adapter must train only on the 40-case
+split, select settings only on the 10-case validation split, and use the
+38-case set only for a final locked evaluation.
