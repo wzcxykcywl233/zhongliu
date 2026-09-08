@@ -77,7 +77,10 @@ function Get-MhaHeader {
 
     $frames = $null
     if ($dimensions.Count -ge 3) {
-        $frames = $dimensions[-1]
+        # TrackRAD stores MetaImage dimensions as T,H,W. SimpleITK reverses
+        # them to W,H,T when loading the array, so the first MHA dimension is
+        # the temporal frame count.
+        $frames = $dimensions[0]
     }
     elseif ($dimensions.Count -eq 2) {
         $frames = 1
@@ -357,4 +360,3 @@ Write-Host "Summary JSON: $summaryJson"
 Write-Host "Case CSV:     $caseCsv"
 Write-Host "MHA CSV:      $mhaCsv"
 Write-Host "Issues CSV:   $issueCsv"
-
