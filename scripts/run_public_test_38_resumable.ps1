@@ -7,22 +7,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Profiles = @(
-    "baseline",
-    "hierarchical_feat05_grid0",
-    "hierarchical_feat05_iterations2",
-    "hierarchical_feat05_grid0_iterations2",
-    "hierarchical_full_grid0",
-    "hierarchical_full_iterations2",
-    "hierarchical_full_grid0_iterations2"
-)
+$manifestPath = Join-Path $Repository `
+    "cotracker-algorithm\experiments\public-test-38-profiles.json"
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Public-test profile manifest does not exist: $manifestPath"
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$Profiles = @($manifest.profiles | ForEach-Object { $_.name })
+if ($Profiles.Count -eq 0 -or $Profiles[0] -ne "baseline") {
+    throw "Public-test profile manifest must start with baseline: $manifestPath"
+}
+if ([int]$manifest.expected_cases -ne 38) {
+    throw "Public-test profile manifest does not specify 38 expected cases"
+}
 
 if (-not (Test-Path -LiteralPath $Dataset -PathType Container)) {
     throw "Combined public test dataset does not exist: $Dataset"
 }
 $caseCount = @(Get-ChildItem -LiteralPath $Dataset -Directory -Force).Count
-if ($caseCount -ne 38) {
-    throw "Public test dataset contains $caseCount cases; expected 38"
+if ($caseCount -ne [int]$manifest.expected_cases) {
+    throw "Public test dataset contains $caseCount cases; expected $($manifest.expected_cases)"
 }
 
 $auditScript = Join-Path $PSScriptRoot "audit_trackrad_dataset.ps1"
@@ -30,7 +34,7 @@ $auditOutput = Join-Path $Results "dataset-audit"
 & $auditScript `
     -DatasetDir $Dataset `
     -OutputDir $auditOutput `
-    -ExpectedCaseCount 38
+    -ExpectedCaseCount ([int]$manifest.expected_cases)
 $audit = Get-Content -LiteralPath (Join-Path $auditOutput "dataset-summary.json") -Raw |
     ConvertFrom-Json
 if (-not $audit.StructureAuditPassed) {
@@ -45,4 +49,3 @@ if (-not $audit.StructureAuditPassed) {
 
 & (Join-Path $PSScriptRoot "summarize_public_test_38.ps1") `
     -Results $Results
-

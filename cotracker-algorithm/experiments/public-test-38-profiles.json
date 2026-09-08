@@ -1,0 +1,20 @@
+{
+  "dataset": "trackrad2025_labeled_public_test_38",
+  "expected_cases": 38,
+  "purpose": "Frozen external evaluation queue selected before inspecting public-test metrics",
+  "profiles": [
+    {"name": "baseline", "display": "Original CoTracker3 baseline"},
+    {"name": "points_500", "display": "500 contour points"},
+    {"name": "support_grid_0", "display": "Disable support grid"},
+    {"name": "iterations_2", "display": "Two refinement iterations"},
+    {"name": "grid0_iterations2", "display": "No support grid plus two iterations"},
+    {"name": "grid0_stride2", "display": "No support grid plus temporal stride two"},
+    {"name": "hierarchical_d10_original_feat_05", "display": "Hierarchical span ten plus 0.5 original-feature memory"},
+    {"name": "hierarchical_full", "display": "Full hierarchical method"},
+    {"name": "hierarchical_feat05_grid0", "display": "Feature memory plus no support grid"},
+    {"name": "hierarchical_feat05_grid0_iterations2", "display": "Feature memory plus no support grid plus two iterations"},
+    {"name": "hierarchical_full_grid0_iterations2", "display": "Full hierarchical method plus no support grid plus two iterations"},
+    {"name": "hierarchical_full_grid0", "display": "Full hierarchical method plus no support grid"}
+  ]
+}
+

@@ -215,6 +215,38 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(official & excluded)
         self.assertFalse(registry["policy"]["include_exploratory_in_official_ranking"])
 
+    def test_public_test_queue_is_frozen_and_valid(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "public-test-38-profiles.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        profiles = [entry["name"] for entry in manifest["profiles"]]
+
+        self.assertEqual(manifest["expected_cases"], 38)
+        self.assertEqual(profiles[0], "baseline")
+        self.assertEqual(len(profiles), 12)
+        self.assertEqual(len(profiles), len(set(profiles)))
+        self.assertTrue(set(profiles) <= set(EXPERIMENTS))
+        self.assertEqual(
+            profiles,
+            [
+                "baseline",
+                "points_500",
+                "support_grid_0",
+                "iterations_2",
+                "grid0_iterations2",
+                "grid0_stride2",
+                "hierarchical_d10_original_feat_05",
+                "hierarchical_full",
+                "hierarchical_feat05_grid0",
+                "hierarchical_feat05_grid0_iterations2",
+                "hierarchical_full_grid0_iterations2",
+                "hierarchical_full_grid0",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

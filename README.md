@@ -39,13 +39,23 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\download_trackrad_public_test_resumable.ps1
 ```
 
-Then evaluate the original baseline and all six pre-registered hierarchical
-combinations. Per-case outputs and per-profile metrics are checkpointed, so the
-same command safely resumes after interruption:
+Then evaluate the original baseline and the eleven pre-registered directions
+selected from the completed 50-case ablation table. The frozen queue is stored
+in `cotracker-algorithm/experiments/public-test-38-profiles.json`. Per-case
+outputs and per-profile metrics are checkpointed, so the same command safely
+resumes after interruption:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\run_public_test_38_resumable.ps1
+```
+
+The queue may also be started before the download finishes. It waits for the
+combined 38-case audit to pass and then launches the same resumable evaluation:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\queue_public_test_38_when_ready.ps1
 ```
 
 Results are written to `public-test-38-results`, including
