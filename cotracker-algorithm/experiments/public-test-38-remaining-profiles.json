@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "dataset": "trackrad2025_labeled_public_test_38",
+  "expected_cases": 38,
+  "purpose": "Supplementary rerun of registered inference profiles absent from the original 12-profile table",
+  "note": "The 38-case results have already been inspected, so this is a supplementary comparison rather than a blind model-selection test.",
+  "profiles": [
+    {"name": "baseline_repeat", "group": "audit", "display": "Exact baseline repeat for output-hash auditing"},
+    {"name": "iterations_6", "group": "single_point", "display": "Six refinement iterations"},
+    {"name": "visibility_0_5", "group": "single_point", "display": "Visibility threshold 0.5"},
+    {"name": "confidence_0_5", "group": "single_point", "display": "Inference confidence threshold 0.5; not confidence-label training"},
+    {"name": "temporal_median_3", "group": "single_point", "display": "Three-frame temporal median"},
+    {"name": "morph_close_3", "group": "single_point", "display": "Three-by-three morphological closing"},
+    {"name": "largest_component", "group": "single_point", "display": "Keep largest connected component"},
+    {"name": "lock_first_mask", "group": "single_point", "display": "Lock the query-frame mask"},
+    {"name": "keyframe_stride_2", "group": "single_point", "display": "Temporal stride two"},
+    {"name": "grid0_iterations2_stride2", "group": "combination", "display": "No support grid plus two iterations plus stride two"},
+    {"name": "hierarchical_d10", "group": "hierarchical", "display": "Position-only re-anchoring every ten frames"},
+    {"name": "hierarchical_d10_occlusion_merge", "group": "hierarchical", "display": "Ten-frame hierarchy plus occlusion-level merging"},
+    {"name": "hierarchical_d10_dual_anchor", "group": "hierarchical", "display": "Ten-frame hierarchy plus dual-anchor fusion"},
+    {"name": "hierarchical_d10_original_feat_025", "group": "hierarchical", "display": "Original-feature memory weight 0.25"},
+    {"name": "hierarchical_d10_original_feat_075", "group": "hierarchical", "display": "Original-feature memory weight 0.75"},
+    {"name": "hierarchical_full_d5", "group": "hierarchical", "display": "Full hierarchy with span five"},
+    {"name": "hierarchical_full_d15", "group": "hierarchical", "display": "Full hierarchy with span fifteen"},
+    {"name": "hierarchical_full_feature_gate", "group": "hierarchical", "display": "Full hierarchy plus feature gate"},
+    {"name": "hierarchical_full_feature_revalidate_r4", "group": "hierarchical", "display": "Full hierarchy plus radius-four feature revalidation"},
+    {"name": "hierarchical_feat05_iterations2", "group": "hierarchical", "display": "Original-feature memory plus two iterations"},
+    {"name": "hierarchical_full_iterations2", "group": "hierarchical", "display": "Full hierarchy plus two iterations"},
+    {"name": "support_grid_15", "group": "slow_single_point", "display": "Support grid size fifteen; deliberately scheduled last"}
+  ],
+  "excluded": [
+    {
+      "name": "points_1500",
+      "reason": "Previously excluded after repeated CUDA device-not-ready failures; run only as an isolated opt-in job."
+    }
+  ]
+}

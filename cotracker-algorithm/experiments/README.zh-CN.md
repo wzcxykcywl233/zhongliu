@@ -247,3 +247,23 @@ profile 的每一个病例输出文件都与基线逐字节相同；只有同时
 `baseline_repeat_deterministic=true` 后，才能将这种零差异解释为参数在本
 数据集上未产生实际作用。主比较使用未压缩预测数组的 SHA-256；另行记录
 MHA 文件 SHA-256，以排除序列化层面的差异。
+
+## 38例测试集表外配置与教师重采样补跑
+
+`public-test-38-remaining-profiles.json` 冻结了原12项结果表之外的推理配置，
+并将曾异常缓慢的 `support_grid_15` 放在队尾。此前因 CUDA 异常明确排除的
+`points_1500` 不会自动运行。`random-tutor-hard-label-test-38.json` 冻结教师
+重采样设计：只用40例训练集训练，使用原始硬标签设置，并在38例公开测试集
+评估；38例数据不会参与训练。
+
+以下命令可断点续跑全部补充实验：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\zhongliu\zhongliu-tuning\scripts\run_remaining_public_test_38_resumable.ps1"
+```
+
+推理结果合并写入 `public-test-38-results`；教师训练和38例评估结果分别写入
+`protocol-40-10-38/random-tutor-hard-label-training` 与
+`protocol-40-10-38/random-tutor-hard-label-test-38`。每25步保存训练断点，
+每个病例原子提交预测结果。断电后重新执行同一命令即可继续。

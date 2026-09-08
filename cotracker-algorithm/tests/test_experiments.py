@@ -247,6 +247,66 @@ class ExperimentTests(unittest.TestCase):
             ],
         )
 
+    def test_remaining_public_test_queue_covers_unreported_profiles(self) -> None:
+        experiment_dir = Path(__file__).resolve().parents[1] / "experiments"
+        reported = json.loads(
+            (experiment_dir / "public-test-38-profiles.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        remaining = json.loads(
+            (experiment_dir / "public-test-38-remaining-profiles.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        reported_names = {entry["name"] for entry in reported["profiles"]}
+        remaining_names = [entry["name"] for entry in remaining["profiles"]]
+
+        self.assertEqual(remaining["expected_cases"], 38)
+        self.assertEqual(len(remaining_names), len(set(remaining_names)))
+        self.assertFalse(reported_names & set(remaining_names))
+        self.assertEqual(
+            set(remaining_names),
+            set(EXPERIMENTS) - reported_names - {"points_1500"},
+        )
+        self.assertEqual(remaining_names[-1], "support_grid_15")
+        self.assertEqual(
+            {entry["name"] for entry in remaining["excluded"]},
+            {"points_1500"},
+        )
+
+    def test_random_tutor_test_manifest_forbids_soft_labels(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "random-tutor-hard-label-test-38.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        names = [entry["name"] for entry in manifest["profiles"]]
+
+        self.assertEqual(manifest["training_cases"], 40)
+        self.assertEqual(manifest["evaluation_cases"], 38)
+        self.assertEqual(manifest["confidence_target_mode"], "hard")
+        self.assertFalse(manifest["soft_confidence_labels"])
+        self.assertEqual(manifest["seeds"], [0, 1, 2])
+        self.assertEqual(
+            names,
+            [
+                "baseline_single_teacher",
+                "random_tutor_w010",
+                "random_tutor_w015",
+                "random_tutor_w020",
+                "random_tutor_w025",
+                "same_teacher_control_w020",
+            ],
+        )
+        training_runner = (
+            Path(__file__).resolve().parents[2]
+            / "scripts"
+            / "run_random_tutor_training_resumable.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"--confidence_target_mode", "hard"', training_runner)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "purpose": "Controlled auxiliary-teacher resampling trained on 40 cases and evaluated on the 38-case public test set",
+  "training_dataset": "trackrad2025_labeled_train_40",
+  "evaluation_dataset": "trackrad2025_labeled_public_test_38",
+  "training_cases": 40,
+  "evaluation_cases": 38,
+  "seeds": [0, 1, 2],
+  "num_steps": 2000,
+  "save_every_steps": 25,
+  "confidence_target_mode": "hard",
+  "soft_confidence_labels": false,
+  "confidence_specific_tuning": false,
+  "profiles": [
+    {"name": "baseline_single_teacher", "primary_weight": 1.0, "auxiliary_weight": 0.0, "auxiliary_teacher": "none"},
+    {"name": "random_tutor_w010", "primary_weight": 0.9, "auxiliary_weight": 0.1, "auxiliary_teacher": "fixed independent sequence"},
+    {"name": "random_tutor_w015", "primary_weight": 0.85, "auxiliary_weight": 0.15, "auxiliary_teacher": "fixed independent sequence"},
+    {"name": "random_tutor_w020", "primary_weight": 0.8, "auxiliary_weight": 0.2, "auxiliary_teacher": "fixed independent sequence"},
+    {"name": "random_tutor_w025", "primary_weight": 0.75, "auxiliary_weight": 0.25, "auxiliary_teacher": "fixed independent sequence"},
+    {"name": "same_teacher_control_w020", "primary_weight": 0.8, "auxiliary_weight": 0.2, "auxiliary_teacher": "same as primary; exact no-op control"}
+  ],
+  "invariants": [
+    "same initial student checkpoint",
+    "same optimizer and schedule",
+    "same data order and augmentation RNG within each paired seed",
+    "same primary-teacher sequence within each paired seed",
+    "same independent auxiliary-teacher sequence for all random-tutor weights within each paired seed",
+    "hard confidence-target mode; no soft-label or confidence-specific tuning"
+  ]
+}

@@ -89,3 +89,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 Future trainable methods such as a Mamba adapter must train only on the 40-case
 split, select settings only on the 10-case validation split, and use the
 38-case set only for a final locked evaluation.
+
+### Run the supplementary 38-case queue
+
+The remaining registered inference profiles and the controlled auxiliary-
+teacher profiles have separate frozen manifests. Soft confidence labels are
+disabled. Teacher models train on the 40-case split and are evaluated, but
+never trained, on the 38-case public test set. Because the public-test results
+have already been inspected, these runs are supplementary comparisons rather
+than a new blind model-selection test.
+
+The following command runs or resumes the complete queue. It retains per-step
+training checkpoints, per-case prediction checkpoints, and append-only logs:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_remaining_public_test_38_resumable.ps1
+```
+
+Use `-SkipInference`, `-SkipTeacherTraining`, or `-SkipTeacherEvaluation` to
+resume only a selected stage. The inference results are merged into
+`public-test-38-results`; hard-label teacher training and evaluation are stored
+under `protocol-40-10-38`.

@@ -116,6 +116,7 @@ foreach ($Profile in $Profiles) {
         "--teacher_seed", "$PrimaryTeacherSeed",
         "--auxiliary_teacher_seed", "$AuxiliaryTeacherSeed",
         "--teacher_log_every", "1",
+        "--confidence_target_mode", "hard",
         "--lr", "0.00005"
     )
     if ($Definition.Same) { $DockerArguments += "--same_teacher_control" }
