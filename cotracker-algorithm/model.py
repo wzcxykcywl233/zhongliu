@@ -85,7 +85,10 @@ def run_algorithm(
     logger.info(f"\ttarget_tensor.shape={target_tensor.shape}")
 
     # Step 2: Model loading -----------------------------------------------------------
-    model = resources.setup_model()
+    model = resources.setup_model(
+        mamba_replace_time_attention=config.mamba_replace_time_attention,
+        mamba_refiner=config.mamba_refiner,
+    )
 
     # Step 3: Create BatchData object -------------------------------------------------
     video = frames_tensor
@@ -119,6 +122,12 @@ def run_algorithm(
             numeric_diagnostics["support_grid_size"] = config.support_grid_size
             numeric_diagnostics["n_iterations"] = config.n_iterations
             numeric_diagnostics["temporal_stride"] = config.temporal_stride
+            numeric_diagnostics["mamba_refiner_enabled"] = int(
+                config.mamba_refiner
+            )
+            numeric_diagnostics["mamba_time_replacement_enabled"] = int(
+                config.mamba_replace_time_attention
+            )
 
         if config.hierarchical_span > 0:
             tracking = resources.hierarchical_forward_pass(

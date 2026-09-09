@@ -29,7 +29,9 @@
     "random_tutor_w020",
     "random_tutor_w025",
     "same_teacher_control_w010",
-    "same_teacher_control_w020"
+    "same_teacher_control_w020",
+    "hierarchical_full_grid0_mamba",
+    "hierarchical_full_grid0_mamba_replacement"
   ],
   "policy": {
     "include_exploratory_in_official_ranking": false,

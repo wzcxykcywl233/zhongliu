@@ -33,6 +33,8 @@ class ExperimentConfig:
     feature_gate_distance: float = 0.0
     feature_similarity_threshold: float = 0.5
     feature_revalidate_radius: int = 0
+    mamba_refiner: bool = False
+    mamba_replace_time_attention: bool = False
 
     def __post_init__(self) -> None:
         if self.border_points < 3:
@@ -63,6 +65,8 @@ class ExperimentConfig:
             raise ValueError("feature_similarity_threshold must be in [-1, 1]")
         if self.feature_revalidate_radius < 0:
             raise ValueError("feature_revalidate_radius must be non-negative")
+        if self.mamba_refiner and self.mamba_replace_time_attention:
+            raise ValueError("select exactly one Mamba integration strategy")
         for name, value in (
             ("original_feature_weight", self.original_feature_weight),
             ("occlusion_visibility_threshold", self.occlusion_visibility_threshold),
@@ -216,6 +220,22 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         n_iterations=2,
         occlusion_merge=True,
         dual_anchor_weight=0.5,
+    ),
+    "hierarchical_full_grid0_mamba": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        mamba_refiner=True,
+    ),
+    "hierarchical_full_grid0_mamba_replacement": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        mamba_replace_time_attention=True,
     ),
 }
 

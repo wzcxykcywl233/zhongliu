@@ -45,6 +45,8 @@ class QueryFeatureMemory(NamedTuple):
 def setup_model(
     checkpoint: str = "cotracker3_offline",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    mamba_replace_time_attention: bool = False,
+    mamba_refiner: bool = False,
 ) -> CoTrackerThreeOffline:
     ts_start = datetime.now()
     checkpoint = os.environ.get("COTRACKER_CHECKPOINT", checkpoint)
@@ -64,6 +66,23 @@ def setup_model(
         ).model
     else:
         model = CoTrackerThreeOffline(stride=4, corr_radius=3, window_len=60)
+        if mamba_replace_time_attention:
+            from cotracker.models.core.cotracker.mamba_time import (
+                replace_updateformer_time_attention,
+            )
+
+            replace_updateformer_time_attention(model)
+        elif mamba_refiner:
+            from cotracker.models.core.cotracker.mamba_time import (
+                attach_trajectory_mamba_refiner,
+            )
+
+            attach_trajectory_mamba_refiner(model)
+        logger.info(
+            "Configured trained checkpoint architecture: mamba_refiner=%s, mamba_time_replacement=%s",
+            mamba_refiner,
+            mamba_replace_time_attention,
+        )
         if checkpoint is not None:
             with open(checkpoint, "rb") as f:
                 state_dict = torch.load(f, map_location="cpu")
@@ -74,6 +93,13 @@ def setup_model(
                     elif "model" in state_dict:
                         state_dict = state_dict["model"]
             model.load_state_dict(state_dict)
+
+    if mamba_replace_time_attention and checkpoint == "cotracker3_offline":
+        raise ValueError(
+            "Mamba time replacement requires a trained checkpoint override"
+        )
+    if mamba_refiner and checkpoint == "cotracker3_offline":
+        raise ValueError("Mamba trajectory refiner requires a trained checkpoint override")
 
     model.eval()
     model.to(device)

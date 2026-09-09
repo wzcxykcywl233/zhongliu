@@ -8,7 +8,8 @@ param(
         "hierarchical_full_d5",
         "hierarchical_full_d15"
     ),
-    [switch]$RequireDiagnostics
+    [switch]$RequireDiagnostics,
+    [string]$ModelCheckpoint = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -82,6 +83,14 @@ try {
     Write-RunMessage "Profiles: $($Profiles -join ', ')"
     Write-RunMessage "Dataset: $Dataset"
     Write-RunMessage "Results: $Results"
+    if (-not [string]::IsNullOrWhiteSpace($ModelCheckpoint)) {
+        if (-not (Test-Path -LiteralPath $ModelCheckpoint -PathType Leaf) -or
+            (Get-Item -LiteralPath $ModelCheckpoint).Length -le 0) {
+            throw "Model checkpoint is missing or empty: $ModelCheckpoint"
+        }
+        $ModelCheckpoint = (Resolve-Path -LiteralPath $ModelCheckpoint).Path
+        Write-RunMessage "Model checkpoint: $ModelCheckpoint"
+    }
 
     $BuildLog = Join-Path $Results "build.log"
     $Status = Invoke-DockerLogged -LogPath $BuildLog -Arguments @(
@@ -168,6 +177,17 @@ try {
                     "--mount", "type=bind,source=$AttemptOutput,target=/output",
                     "trackrad-algorithm-cotracker-algorithm"
                 )
+                if (-not [string]::IsNullOrWhiteSpace($ModelCheckpoint)) {
+                    $ImageIndex = $DockerArguments.Count - 1
+                    $DockerArguments = @(
+                        $DockerArguments[0..($ImageIndex - 1)] +
+                        @(
+                            "--env", "COTRACKER_CHECKPOINT=/opt/checkpoint/model.pth",
+                            "--mount", "type=bind,source=$ModelCheckpoint,target=/opt/checkpoint/model.pth,readonly"
+                        ) +
+                        $DockerArguments[$ImageIndex]
+                    )
+                }
                 if ($RequireDiagnostics) {
                     $ImageIndex = $DockerArguments.Count - 1
                     $DockerArguments = @(

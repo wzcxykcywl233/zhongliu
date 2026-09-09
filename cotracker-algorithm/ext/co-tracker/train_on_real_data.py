@@ -51,6 +51,10 @@ from cotracker.utils.confidence_head_tuning import (
     trainable_parameter_count,
     trainable_parameter_names,
 )
+from cotracker.models.core.cotracker.mamba_time import (
+    attach_trajectory_mamba_refiner,
+    replace_updateformer_time_attention,
+)
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -62,7 +66,14 @@ from cotracker.utils.train_utils import (
 
 def fetch_optimizer(args, model):
     """Create the optimizer and learning rate scheduler"""
-    if args.confidence_head_only:
+    if args.mamba_time_replacement or args.mamba_trajectory_refiner:
+        parameters = [p for p in model.parameters() if p.requires_grad]
+        weight_decay = args.wdecay
+        print(
+            "Mamba trainable elements: "
+            f"{sum(parameter.numel() for parameter in parameters)}"
+        )
+    elif args.confidence_head_only:
         parameters = configure_confidence_head_only(model)
         weight_decay = 0.0
         print(
@@ -561,6 +572,31 @@ class Lite(LightningLite):
                 )
         else:
             raise ValueError(f"Model {args.model_name} doesn't exist")
+
+        if args.mamba_time_replacement or args.mamba_trajectory_refiner:
+            if not args.restore_ckpt:
+                raise ValueError(
+                    "Mamba training requires --restore_ckpt on first run"
+                )
+            base_state = self.load(args.restore_ckpt)
+            if "model" in base_state:
+                base_state = base_state["model"]
+            if list(base_state.keys())[0].startswith("module."):
+                base_state = {
+                    key.replace("module.", ""): value
+                    for key, value in base_state.items()
+                }
+            model.load_state_dict(base_state, strict=True)
+            if args.mamba_time_replacement:
+                replace_updateformer_time_attention(model)
+                mechanism = "UpdateFormer temporal attention replacement"
+            else:
+                attach_trajectory_mamba_refiner(model)
+                mechanism = "trajectory residual refiner"
+            logging.info(
+                "Loaded baseline checkpoint and attached Mamba %s", mechanism
+            )
+            args.restore_ckpt = None
 
         with open(args.ckpt_path + "/meta.json", "w") as file:
             json.dump(vars(args), file, sort_keys=True, indent=4)
@@ -1082,6 +1118,22 @@ if __name__ == "__main__":
             "train shared UpdateFormer representations and the confidence output "
             "row using confidence loss only; coordinate and visibility heads stay "
             "frozen"
+        ),
+    )
+    parser.add_argument(
+        "--mamba_time_replacement",
+        action="store_true",
+        help=(
+            "replace UpdateFormer temporal attention with trainable bidirectional "
+            "Mamba-style selective SSM blocks and freeze the remaining model"
+        ),
+    )
+    parser.add_argument(
+        "--mamba_trajectory_refiner",
+        action="store_true",
+        help=(
+            "attach a trainable Mamba trajectory residual adapter and freeze "
+            "the original CoTracker"
         ),
     )
     parser.add_argument(

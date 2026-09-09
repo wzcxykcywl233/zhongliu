@@ -32,6 +32,14 @@
     {
       "name": "points_1500",
       "reason": "Previously excluded after repeated CUDA device-not-ready failures; run only as an isolated opt-in job."
+    },
+    {
+      "name": "hierarchical_full_grid0_mamba",
+      "reason": "Trainable Mamba adapter profile; evaluated by the dedicated 40/10/38 Mamba queue with its own checkpoint."
+    },
+    {
+      "name": "hierarchical_full_grid0_mamba_replacement",
+      "reason": "Trainable Mamba temporal-replacement profile; evaluated by the dedicated 40/10/38 Mamba queue with its own checkpoint."
     }
   ]
 }

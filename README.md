@@ -90,6 +90,28 @@ Future trainable methods such as a Mamba adapter must train only on the 40-case
 split, select settings only on the 10-case validation split, and use the
 38-case set only for a final locked evaluation.
 
+### Run the conservative and aggressive Mamba experiments
+
+The dedicated queue trains two exploratory Mamba-style variants from the same
+frozen CoTracker checkpoint: a conservative trajectory residual adapter and an
+aggressive replacement of UpdateFormer temporal-attention blocks. Both use one
+fixed offline teacher, hard labels, no auxiliary teacher, and the 40/10/38
+protocol. Training is checkpointed every 25 steps and evaluation is committed
+per case:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_mamba_40_10_38_resumable.ps1 `
+  -NumSteps 1000 `
+  -SaveEverySteps 25
+```
+
+Rerun the same command after an interruption. The 38-case table and direct
+deltas against `hierarchical_full_grid0` are written below
+`protocol-40-10-38\mamba-experiments\test-38`. The frozen design and reporting
+rules are documented in
+`cotracker-algorithm/experiments/MAMBA_EXPERIMENTS.zh-CN.md`.
+
 ### Run the supplementary 38-case queue
 
 The remaining registered inference profiles and the controlled auxiliary-

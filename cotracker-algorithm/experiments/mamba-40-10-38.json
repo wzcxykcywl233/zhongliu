@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "status": "exploratory",
+  "protocol": {
+    "training_dataset": "trackrad2025_labeled_train_40",
+    "selection_dataset": "trackrad2025_labeled_validation_10",
+    "final_evaluation_dataset": "trackrad2025_labeled_public_test_38",
+    "training_cases": 40,
+    "validation_cases": 10,
+    "test_cases": 38,
+    "training_steps": 1000,
+    "checkpoint_interval_steps": 25,
+    "student_seed": 20260910,
+    "teacher_seed": 20260910,
+    "teacher": "offline_cotracker_three",
+    "auxiliary_teacher_weight": 0.0,
+    "confidence_target": "hard",
+    "learning_rate": 0.00005
+  },
+  "reference_profiles": [
+    "baseline",
+    "hierarchical_full_grid0"
+  ],
+  "profiles": [
+    {
+      "name": "hierarchical_full_grid0_mamba",
+      "integration": "trajectory_residual_adapter",
+      "frozen": "all pretrained CoTracker parameters",
+      "trainable": "two bidirectional Mamba-style trajectory blocks and a bounded residual head",
+      "maximum_residual_pixels": 8.0
+    },
+    {
+      "name": "hierarchical_full_grid0_mamba_replacement",
+      "integration": "updateformer_temporal_attention_replacement",
+      "frozen": "all pretrained CoTracker parameters outside replacement blocks",
+      "trainable": "all replacement bidirectional Mamba-style selective state-space blocks",
+      "state_dimension": 8
+    }
+  ],
+  "reporting": {
+    "primary_reference": "hierarchical_full_grid0",
+    "primary_split": "final_evaluation_dataset",
+    "metric_directions": {
+      "DSC": "higher",
+      "HD95": "lower",
+      "MASD": "lower",
+      "CD": "lower",
+      "D98": "higher"
+    }
+  }
+}

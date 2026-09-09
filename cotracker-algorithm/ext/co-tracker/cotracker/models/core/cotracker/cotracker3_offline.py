@@ -272,8 +272,28 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         else:
             train_data = None
 
+        final_coordinates = coord_preds[-1][..., :2]
+        if hasattr(self, "trajectory_mamba_refiner"):
+            final_coordinates, _ = self.trajectory_mamba_refiner(
+                final_coordinates,
+                vis_preds[-1],
+                confidence_preds[-1],
+                self.model_resolution,
+            )
+            query_frames = queries[..., 0].long().clamp(0, final_coordinates.shape[1] - 1)
+            frame_indices = torch.arange(
+                final_coordinates.shape[1], device=queries.device
+            ).view(1, -1, 1)
+            query_mask = frame_indices == query_frames[:, None, :]
+            query_coordinates = queries[:, None, :, 1:3].expand_as(final_coordinates)
+            final_coordinates = torch.where(
+                query_mask[..., None], query_coordinates, final_coordinates
+            )
+            if is_train:
+                all_coords_predictions[-1][-1] = final_coordinates
+
         result = (
-            coord_preds[-1][..., :2],
+            final_coordinates,
             vis_preds[-1],
             confidence_preds[-1],
             train_data,

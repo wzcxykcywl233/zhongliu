@@ -160,6 +160,22 @@ class ExperimentTests(unittest.TestCase):
                 "occlusion_merge": True,
                 "dual_anchor_weight": 0.5,
             },
+            "hierarchical_full_grid0_mamba": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "mamba_refiner": True,
+            },
+            "hierarchical_full_grid0_mamba_replacement": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "mamba_replace_time_attention": True,
+            },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         names = [field.name for field in fields(ExperimentConfig)]
@@ -190,6 +206,42 @@ class ExperimentTests(unittest.TestCase):
                 dual_anchor_weight=0.5,
                 feature_revalidate_radius=4,
             )
+
+    def test_mamba_strategies_are_mutually_exclusive(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly one Mamba"):
+            ExperimentConfig(
+                mamba_refiner=True,
+                mamba_replace_time_attention=True,
+            )
+
+    def test_mamba_protocol_is_frozen_to_40_10_38(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "mamba-40-10-38.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        protocol = manifest["protocol"]
+        profiles = [entry["name"] for entry in manifest["profiles"]]
+
+        self.assertEqual(
+            (protocol["training_cases"], protocol["validation_cases"], protocol["test_cases"]),
+            (40, 10, 38),
+        )
+        self.assertEqual(protocol["auxiliary_teacher_weight"], 0.0)
+        self.assertEqual(protocol["confidence_target"], "hard")
+        self.assertEqual(
+            profiles,
+            [
+                "hierarchical_full_grid0_mamba",
+                "hierarchical_full_grid0_mamba_replacement",
+            ],
+        )
+        self.assertTrue(set(profiles) <= set(HIERARCHICAL_EXPERIMENTS))
+        self.assertEqual(
+            manifest["reporting"]["primary_reference"],
+            "hierarchical_full_grid0",
+        )
 
     def test_official_experiment_registry_is_consistent(self) -> None:
         registry_path = (
@@ -261,18 +313,23 @@ class ExperimentTests(unittest.TestCase):
         )
         reported_names = {entry["name"] for entry in reported["profiles"]}
         remaining_names = [entry["name"] for entry in remaining["profiles"]]
+        excluded_names = {entry["name"] for entry in remaining["excluded"]}
 
         self.assertEqual(remaining["expected_cases"], 38)
         self.assertEqual(len(remaining_names), len(set(remaining_names)))
         self.assertFalse(reported_names & set(remaining_names))
         self.assertEqual(
             set(remaining_names),
-            set(EXPERIMENTS) - reported_names - {"points_1500"},
+            set(EXPERIMENTS) - reported_names - excluded_names,
         )
         self.assertEqual(remaining_names[-1], "support_grid_15")
         self.assertEqual(
-            {entry["name"] for entry in remaining["excluded"]},
-            {"points_1500"},
+            excluded_names,
+            {
+                "points_1500",
+                "hierarchical_full_grid0_mamba",
+                "hierarchical_full_grid0_mamba_replacement",
+            },
         )
 
     def test_random_tutor_test_manifest_forbids_soft_labels(self) -> None:
