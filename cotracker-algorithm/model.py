@@ -158,17 +158,21 @@ def run_algorithm(
                     raise ValueError(
                         "long fusion gate profile requires COTRACKER_FUSION_GATE_CHECKPOINT"
                     )
-                gate, feature_mean, feature_std = resources.load_long_fusion_gate(
-                    gate_checkpoint,
-                    config.long_fusion_gate,
-                    video.device,
-                )
                 gate_features = resources.build_long_fusion_features(
                     tracking_output.hierarchical,
                     tracking_output.global_result,
                     tracking_output.hierarchical_similarity,
                     tracking_output.global_similarity,
                     COTRACKER_SHAPE,
+                )
+                # ``video`` remains the original CPU tensor because the tracking
+                # helper transfers its own inputs.  The returned trajectories and
+                # derived gate features live on the actual inference device.
+                gate_device = gate_features.device
+                gate, feature_mean, feature_std = resources.load_long_fusion_gate(
+                    gate_checkpoint,
+                    config.long_fusion_gate,
+                    gate_device,
                 )
                 gate_logits = gate((gate_features - feature_mean) / feature_std)
                 tracking, gate_weights = resources.apply_long_fusion_gate(
