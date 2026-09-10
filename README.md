@@ -112,6 +112,21 @@ deltas against `hierarchical_full_grid0` are written below
 rules are documented in
 `cotracker-algorithm/experiments/MAMBA_EXPERIMENTS.zh-CN.md`.
 
+The second Mamba study keeps CoTracker intact and learns only a full-case
+hierarchical/global fusion gate from the 40-case ground-truth masks. It includes
+an Oracle upper-bound audit and a per-frame MLP control so that any improvement
+can be attributed to temporal modeling:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_long_fusion_mamba_resumable.ps1 `
+  -TrainingSteps 500 `
+  -SaveEverySteps 25
+```
+
+See `cotracker-algorithm/experiments/LONG_FUSION_MAMBA.zh-CN.md` for the frozen
+design and output locations.
+
 ### Run the supplementary 38-case queue
 
 The remaining registered inference profiles and the controlled auxiliary-

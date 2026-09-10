@@ -31,7 +31,9 @@
     "same_teacher_control_w010",
     "same_teacher_control_w020",
     "hierarchical_full_grid0_mamba",
-    "hierarchical_full_grid0_mamba_replacement"
+    "hierarchical_full_grid0_mamba_replacement",
+    "hierarchical_full_grid0_iterations2_mlp_gate",
+    "hierarchical_full_grid0_iterations2_mamba_gate"
   ],
   "policy": {
     "include_exploratory_in_official_ranking": false,

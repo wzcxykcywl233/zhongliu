@@ -130,7 +130,7 @@ def run_algorithm(
             )
 
         if config.hierarchical_span > 0:
-            tracking = resources.hierarchical_forward_pass(
+            tracking_output = resources.hierarchical_forward_pass(
                 model=model,
                 video=video,
                 queries=queries,
@@ -148,7 +148,47 @@ def run_algorithm(
                 feature_similarity_threshold=config.feature_similarity_threshold,
                 feature_revalidate_radius=config.feature_revalidate_radius,
                 diagnostics=numeric_diagnostics,
+                return_long_fusion_context=config.long_fusion_gate != "none",
             )
+            if config.long_fusion_gate == "none":
+                tracking = tracking_output
+            else:
+                gate_checkpoint = os.environ.get("COTRACKER_FUSION_GATE_CHECKPOINT")
+                if not gate_checkpoint:
+                    raise ValueError(
+                        "long fusion gate profile requires COTRACKER_FUSION_GATE_CHECKPOINT"
+                    )
+                gate, feature_mean, feature_std = resources.load_long_fusion_gate(
+                    gate_checkpoint,
+                    config.long_fusion_gate,
+                    video.device,
+                )
+                gate_features = resources.build_long_fusion_features(
+                    tracking_output.hierarchical,
+                    tracking_output.global_result,
+                    tracking_output.hierarchical_similarity,
+                    tracking_output.global_similarity,
+                    COTRACKER_SHAPE,
+                )
+                gate_logits = gate((gate_features - feature_mean) / feature_std)
+                tracking, gate_weights = resources.apply_long_fusion_gate(
+                    tracking_output.hierarchical,
+                    tracking_output.global_result,
+                    gate_logits,
+                )
+                if numeric_diagnostics is not None:
+                    numeric_diagnostics["long_fusion_gate_frames"] = int(
+                        gate_weights.numel()
+                    )
+                    numeric_diagnostics["long_fusion_global_weight_mean"] = float(
+                        gate_weights.mean().item()
+                    )
+                    numeric_diagnostics["long_fusion_global_weight_min"] = float(
+                        gate_weights.min().item()
+                    )
+                    numeric_diagnostics["long_fusion_global_weight_max"] = float(
+                        gate_weights.max().item()
+                    )
         else:
             tracking = resources.forward_pass(
                 model=model,

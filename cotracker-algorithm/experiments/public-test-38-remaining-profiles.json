@@ -40,6 +40,14 @@
     {
       "name": "hierarchical_full_grid0_mamba_replacement",
       "reason": "Trainable Mamba temporal-replacement profile; evaluated by the dedicated 40/10/38 Mamba queue with its own checkpoint."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_mlp_gate",
+      "reason": "Supervised long-fusion control; evaluated by its dedicated 40/10/38 queue and checkpoint."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_mamba_gate",
+      "reason": "Supervised full-sequence Mamba gate; evaluated by its dedicated 40/10/38 queue and checkpoint."
     }
   ]
 }

@@ -35,6 +35,7 @@ class ExperimentConfig:
     feature_revalidate_radius: int = 0
     mamba_refiner: bool = False
     mamba_replace_time_attention: bool = False
+    long_fusion_gate: str = "none"
 
     def __post_init__(self) -> None:
         if self.border_points < 3:
@@ -67,6 +68,10 @@ class ExperimentConfig:
             raise ValueError("feature_revalidate_radius must be non-negative")
         if self.mamba_refiner and self.mamba_replace_time_attention:
             raise ValueError("select exactly one Mamba integration strategy")
+        if self.long_fusion_gate not in {"none", "mlp", "mamba"}:
+            raise ValueError("long_fusion_gate must be none, mlp, or mamba")
+        if self.long_fusion_gate != "none" and self.dual_anchor_weight == 0:
+            raise ValueError("long fusion gate requires dual anchor tracking")
         for name, value in (
             ("original_feature_weight", self.original_feature_weight),
             ("occlusion_visibility_threshold", self.occlusion_visibility_threshold),
@@ -236,6 +241,24 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         occlusion_merge=True,
         dual_anchor_weight=0.5,
         mamba_replace_time_attention=True,
+    ),
+    "hierarchical_full_grid0_iterations2_mlp_gate": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        long_fusion_gate="mlp",
+    ),
+    "hierarchical_full_grid0_iterations2_mamba_gate": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        long_fusion_gate="mamba",
     ),
 }
 

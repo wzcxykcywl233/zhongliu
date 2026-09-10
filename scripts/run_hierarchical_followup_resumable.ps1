@@ -9,7 +9,8 @@ param(
         "hierarchical_full_d15"
     ),
     [switch]$RequireDiagnostics,
-    [string]$ModelCheckpoint = ""
+    [string]$ModelCheckpoint = "",
+    [string]$FusionGateCheckpoint = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,6 +91,14 @@ try {
         }
         $ModelCheckpoint = (Resolve-Path -LiteralPath $ModelCheckpoint).Path
         Write-RunMessage "Model checkpoint: $ModelCheckpoint"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($FusionGateCheckpoint)) {
+        if (-not (Test-Path -LiteralPath $FusionGateCheckpoint -PathType Leaf) -or
+            (Get-Item -LiteralPath $FusionGateCheckpoint).Length -le 0) {
+            throw "Fusion gate checkpoint is missing or empty: $FusionGateCheckpoint"
+        }
+        $FusionGateCheckpoint = (Resolve-Path -LiteralPath $FusionGateCheckpoint).Path
+        Write-RunMessage "Fusion gate checkpoint: $FusionGateCheckpoint"
     }
 
     $BuildLog = Join-Path $Results "build.log"
@@ -188,6 +197,17 @@ try {
                         $DockerArguments[$ImageIndex]
                     )
                 }
+                if (-not [string]::IsNullOrWhiteSpace($FusionGateCheckpoint)) {
+                    $ImageIndex = $DockerArguments.Count - 1
+                    $DockerArguments = @(
+                        $DockerArguments[0..($ImageIndex - 1)] +
+                        @(
+                            "--env", "COTRACKER_FUSION_GATE_CHECKPOINT=/opt/fusion-gate/gate.pth",
+                            "--mount", "type=bind,source=$FusionGateCheckpoint,target=/opt/fusion-gate/gate.pth,readonly"
+                        ) +
+                        $DockerArguments[$ImageIndex]
+                    )
+                }
                 if ($RequireDiagnostics) {
                     $ImageIndex = $DockerArguments.Count - 1
                     $DockerArguments = @(
@@ -228,6 +248,12 @@ try {
                     }
                     if ($Diagnostic.profile -ne $Profile) {
                         throw "$Profile/$CaseId reported profile '$($Diagnostic.profile)'"
+                    }
+                    if ($Profile -like "*_gate") {
+                        $GateFrames = $Diagnostic.mechanism.long_fusion_gate_frames
+                        if ($null -eq $GateFrames -or [int]$GateFrames -le 0) {
+                            throw "$Profile/$CaseId did not report an active long-fusion gate"
+                        }
                     }
                     $OutputHash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
                     $Diagnostic.prediction |

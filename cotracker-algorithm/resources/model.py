@@ -42,6 +42,13 @@ class QueryFeatureMemory(NamedTuple):
     support: tuple[torch.Tensor, ...]
 
 
+class LongFusionContext(NamedTuple):
+    hierarchical: TrackingResult
+    global_result: TrackingResult
+    hierarchical_similarity: torch.Tensor
+    global_similarity: torch.Tensor
+
+
 def setup_model(
     checkpoint: str = "cotracker3_offline",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -561,8 +568,9 @@ def hierarchical_forward_pass(
     feature_similarity_threshold: float = 0.5,
     feature_revalidate_radius: int = 0,
     diagnostics: dict[str, int | float] | None = None,
+    return_long_fusion_context: bool = False,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-) -> TrackingResult:
+) -> TrackingResult | LongFusionContext:
     """Track short levels, re-anchor at endpoints, and optionally merge occlusions."""
     if span < 1:
         raise ValueError("span must be positive")
@@ -602,15 +610,29 @@ def hierarchical_forward_pass(
         return result
 
     global_result = None
+    global_memory = None
+    global_frame_features = None
     if dual_anchor_weight > 0:
-        global_result = forward_pass(
-            model,
-            video,
-            queries,
-            support_grid_size=support_grid_size,
-            n_iterations=n_iterations,
-            device=device,
-        )
+        if return_long_fusion_context:
+            global_result, global_memory, global_frame_features = _run_single_clip(
+                model,
+                video,
+                queries,
+                support_grid_size=support_grid_size,
+                n_iterations=n_iterations,
+                return_query_feature_memory=True,
+                return_frame_features=True,
+                device=device,
+            )
+        else:
+            global_result = forward_pass(
+                model,
+                video,
+                queries,
+                support_grid_size=support_grid_size,
+                n_iterations=n_iterations,
+                device=device,
+            )
 
     trajectories = torch.zeros(
         (batch, total_frames, point_count, 2), device=device, dtype=queries.dtype
@@ -836,4 +858,28 @@ def hierarchical_forward_pass(
     if not bool(covered.all().item()):
         raise RuntimeError("hierarchical tracker did not cover every frame")
 
-    return TrackingResult(trajectories, visibility, confidence)
+    hierarchical = TrackingResult(trajectories, visibility, confidence)
+    if not return_long_fusion_context:
+        return hierarchical
+    if global_result is None or global_memory is None or global_frame_features is None:
+        raise RuntimeError("long fusion context requires global tracking features")
+
+    reference = global_memory.track[0]
+    if reference.ndim == 4:
+        reference = reference[:, 0]
+    reference = torch.nn.functional.normalize(reference[:, :point_count], dim=-1)
+    hierarchical_features = sample_trajectory_features(
+        model, global_frame_features, hierarchical.trajectories
+    )
+    hierarchical_similarity = (hierarchical_features * reference[:, None]).sum(dim=-1)
+    del hierarchical_features
+    global_features = sample_trajectory_features(
+        model, global_frame_features, global_result.trajectories
+    )
+    global_similarity = (global_features * reference[:, None]).sum(dim=-1)
+    return LongFusionContext(
+        hierarchical,
+        global_result,
+        hierarchical_similarity,
+        global_similarity,
+    )

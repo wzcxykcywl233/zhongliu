@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "status": "exploratory",
+  "base_profile": "hierarchical_full_grid0_iterations2",
+  "datasets": {
+    "training": "trackrad2025_labeled_train_40",
+    "validation": "trackrad2025_labeled_validation_10",
+    "final_test": "trackrad2025_labeled_public_test_38"
+  },
+  "supervision": {
+    "source": "per-frame TrackRAD ground-truth segmentation",
+    "target": "global branch has higher frame DSC than hierarchical branch",
+    "teacher_model": null,
+    "soft_confidence_labels": false
+  },
+  "controls": [
+    {
+      "name": "hierarchical_full_grid0_iterations2",
+      "role": "fixed hierarchical/global fusion control"
+    },
+    {
+      "name": "oracle_branch_selection",
+      "role": "non-deployable upper-bound audit on training and validation only"
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_mlp_gate",
+      "role": "per-frame non-temporal learned control"
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_mamba_gate",
+      "role": "full-case bidirectional Mamba-style temporal gate"
+    }
+  ],
+  "training": {
+    "steps": 500,
+    "checkpoint_interval": 25,
+    "seed": 20260910,
+    "learning_rate": 0.001,
+    "complete_case_sequence": true
+  },
+  "reporting": {
+    "primary_split": "final_test",
+    "direct_reference": "hierarchical_full_grid0_iterations2",
+    "mamba_claim_requires_beating_mlp_control": true
+  }
+}

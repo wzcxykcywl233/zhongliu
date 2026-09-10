@@ -176,6 +176,24 @@ class ExperimentTests(unittest.TestCase):
                 "dual_anchor_weight": 0.5,
                 "mamba_replace_time_attention": True,
             },
+            "hierarchical_full_grid0_iterations2_mlp_gate": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "long_fusion_gate": "mlp",
+            },
+            "hierarchical_full_grid0_iterations2_mamba_gate": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "long_fusion_gate": "mamba",
+            },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         names = [field.name for field in fields(ExperimentConfig)]
@@ -213,6 +231,33 @@ class ExperimentTests(unittest.TestCase):
                 mamba_refiner=True,
                 mamba_replace_time_attention=True,
             )
+
+    def test_long_fusion_gate_requires_a_dual_anchor_profile(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires dual anchor"):
+            ExperimentConfig(long_fusion_gate="mamba")
+        with self.assertRaisesRegex(ValueError, "must be none, mlp, or mamba"):
+            ExperimentConfig(long_fusion_gate="transformer")
+
+    def test_long_fusion_protocol_uses_real_labels_and_no_teacher(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "long-fusion-mamba-40-10-38.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["base_profile"], "hierarchical_full_grid0_iterations2")
+        self.assertEqual(manifest["supervision"]["source"], "per-frame TrackRAD ground-truth segmentation")
+        self.assertIsNone(manifest["supervision"]["teacher_model"])
+        self.assertFalse(manifest["supervision"]["soft_confidence_labels"])
+        self.assertEqual(
+            [control["name"] for control in manifest["controls"]],
+            [
+                "hierarchical_full_grid0_iterations2",
+                "oracle_branch_selection",
+                "hierarchical_full_grid0_iterations2_mlp_gate",
+                "hierarchical_full_grid0_iterations2_mamba_gate",
+            ],
+        )
 
     def test_mamba_protocol_is_frozen_to_40_10_38(self) -> None:
         manifest_path = (
@@ -329,6 +374,8 @@ class ExperimentTests(unittest.TestCase):
                 "points_1500",
                 "hierarchical_full_grid0_mamba",
                 "hierarchical_full_grid0_mamba_replacement",
+                "hierarchical_full_grid0_iterations2_mlp_gate",
+                "hierarchical_full_grid0_iterations2_mamba_gate",
             },
         )
 
