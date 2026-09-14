@@ -127,6 +127,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 See `cotracker-algorithm/experiments/LONG_FUSION_MAMBA.zh-CN.md` for the frozen
 design and output locations.
 
+### Run the parameter-free dynamic query-memory study
+
+This study keeps the CoTracker backbone and the established
+`hierarchical_full_grid0_iterations2` configuration fixed. It permanently
+retains the first query anchor and compares a latest reliable anchor, a
+reliability-ranked Top-K memory, and a reliability-plus-diversity Top-K memory.
+No model training, teacher model, or soft labels are used.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_dynamic_query_memory_resumable.ps1
+```
+
+The queue audits the 40/10/38 split, evaluates the fixed profiles on validation
+10 and test 38, records memory admission/fusion diagnostics, and resumes at the
+per-case boundary after interruption. See
+`cotracker-algorithm/experiments/DYNAMIC_QUERY_MEMORY.zh-CN.md` for the frozen
+design.
+
 ### Run the supplementary 38-case queue
 
 The remaining registered inference profiles and the controlled auxiliary-

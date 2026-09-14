@@ -226,6 +226,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
 `hierarchical_feat05_grid0_iterations2` 作为轻量候选。后续正式组合应从这三组
 出发，不再把置信度标签训练或辅助教师训练结果混入本节。
 
+## 多锚点动态查询记忆
+
+以 `hierarchical_full_grid0_iterations2` 为固定对照，新增 latest、可靠性 Top-K
+及可靠性＋特征多样性 Top-K 三种有界记忆。首帧锚点永久保留，后续锚点须通过
+可靠性和首帧特征相似度门槛；失败的遮挡短级不会写入记忆。完整公式、冻结参数
+及 40/10/38 断电续跑命令见 `DYNAMIC_QUERY_MEMORY.zh-CN.md`。
+
 ## 全量可审计复验
 
 `scripts/run_full_audit_resumable.ps1` 会重新运行全部往期实验，并额外运行

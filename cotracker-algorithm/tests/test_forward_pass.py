@@ -9,6 +9,7 @@ import torch
 ALGORITHM_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ALGORITHM_DIR))
 sys.path.insert(0, str(ALGORITHM_DIR / "ext" / "co-tracker"))
+sys.path.insert(0, str(ALGORITHM_DIR / "resources"))
 
 spec = importlib.util.spec_from_file_location(
     "cotracker_resource_model_standalone",
@@ -138,6 +139,29 @@ class ForwardPassTests(unittest.TestCase):
         self.assertTrue(model.calls[1]["has_memory"])
         self.assertEqual(model.calls[1]["feature_weight"], 0.5)
 
+    def test_dynamic_query_memory_writes_and_reuses_multiple_anchors(self) -> None:
+        model = HierarchicalFakeCoTracker()
+        video = torch.zeros((1, 7, 1, 8, 8))
+        queries = torch.tensor([[[0.0, 1.0, 2.0]]])
+        diagnostics = {}
+        resource_model.hierarchical_forward_pass(
+            model,
+            video,
+            queries,
+            span=2,
+            support_grid_size=0,
+            original_feature_weight=0.5,
+            query_memory_mode="latest",
+            query_memory_slots=2,
+            diagnostics=diagnostics,
+            device="cpu",
+        )
+
+        self.assertEqual([call["has_memory"] for call in model.calls], [False, True, True])
+        self.assertEqual(diagnostics["query_memory_writes_accepted"], 3)
+        self.assertEqual(diagnostics["query_memory_slots_used_max"], 2)
+        self.assertEqual(diagnostics["query_memory_evictions"], 1)
+
     def test_occlusion_detector_requires_continuous_hidden_points(self) -> None:
         visibility = torch.tensor(
             [[[1.0, 1.0], [0.1, 0.9], [0.2, 0.8], [0.1, 0.7]]]
@@ -166,6 +190,27 @@ class ForwardPassTests(unittest.TestCase):
         self.assertTrue(torch.all(result.visibility == 1.0))
         self.assertEqual(diagnostics["occlusion_merges"], 1)
         self.assertEqual(diagnostics["hierarchical_level_runs"], 3)
+
+    def test_failed_occlusion_level_does_not_enter_query_memory(self) -> None:
+        model = HierarchicalFakeCoTracker(occluded_query_x=2.0)
+        video = torch.zeros((1, 7, 1, 8, 8))
+        queries = torch.tensor([[[0.0, 0.0, 0.0]]])
+        diagnostics = {}
+        resource_model.hierarchical_forward_pass(
+            model,
+            video,
+            queries,
+            span=2,
+            support_grid_size=0,
+            original_feature_weight=0.5,
+            occlusion_merge=True,
+            query_memory_mode="latest",
+            query_memory_slots=2,
+            diagnostics=diagnostics,
+            device="cpu",
+        )
+        self.assertEqual(diagnostics["query_memory_writes_accepted"], 1)
+        self.assertEqual(diagnostics["query_memory_duplicate_frames"], 1)
 
     def test_feature_gate_selects_appearance_consistent_branch_when_far(self) -> None:
         local = resource_model.TrackingResult(

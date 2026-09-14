@@ -147,6 +147,16 @@ def run_algorithm(
                 feature_gate_distance=config.feature_gate_distance,
                 feature_similarity_threshold=config.feature_similarity_threshold,
                 feature_revalidate_radius=config.feature_revalidate_radius,
+                query_memory_mode=config.query_memory_mode,
+                query_memory_slots=config.query_memory_slots,
+                query_memory_min_reliability=(
+                    config.query_memory_min_reliability
+                ),
+                query_memory_min_similarity=config.query_memory_min_similarity,
+                query_memory_original_floor=config.query_memory_original_floor,
+                query_memory_diversity_weight=(
+                    config.query_memory_diversity_weight
+                ),
                 diagnostics=numeric_diagnostics,
                 return_long_fusion_context=config.long_fusion_gate != "none",
             )

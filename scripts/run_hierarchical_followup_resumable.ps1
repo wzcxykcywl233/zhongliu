@@ -255,6 +255,16 @@ try {
                             throw "$Profile/$CaseId did not report an active long-fusion gate"
                         }
                     }
+                    if ($Profile -like "*_memory_*") {
+                        $MemoryFusions = $Diagnostic.mechanism.query_memory_fusions
+                        $MemoryWrites = $Diagnostic.mechanism.query_memory_writes_accepted
+                        if ($null -eq $MemoryFusions -or [int]$MemoryFusions -le 0) {
+                            throw "$Profile/$CaseId did not report active query-memory fusion"
+                        }
+                        if ($null -eq $MemoryWrites -or [int]$MemoryWrites -le 0) {
+                            throw "$Profile/$CaseId did not report an accepted query-memory anchor"
+                        }
+                    }
                     $OutputHash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
                     $Diagnostic.prediction |
                         Add-Member -NotePropertyName output_file_sha256 `

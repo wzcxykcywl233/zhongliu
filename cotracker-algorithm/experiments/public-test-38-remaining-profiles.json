@@ -48,6 +48,18 @@
     {
       "name": "hierarchical_full_grid0_iterations2_mamba_gate",
       "reason": "Supervised full-sequence Mamba gate; evaluated by its dedicated 40/10/38 queue and checkpoint."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_latest",
+      "reason": "Dynamic query-memory profile; evaluated by the dedicated 40/10/38 memory queue."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk",
+      "reason": "Dynamic query-memory profile; evaluated by the dedicated 40/10/38 memory queue."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+      "reason": "Dynamic query-memory profile; evaluated by the dedicated 40/10/38 memory queue."
     }
   ]
 }

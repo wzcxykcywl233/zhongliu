@@ -8,6 +8,8 @@ __all__ = [
     "build_long_fusion_features",
     "load_long_fusion_gate",
     "LONG_FUSION_FEATURE_DIM",
+    "DynamicQueryMemoryBank",
+    "QueryMemoryEntry",
     "convert_mask_to_points",
     "convert_points_to_mask",
     "convert_point_trajectory_to_mask_sequence",
@@ -20,6 +22,7 @@ from .long_fusion import (
     build_long_fusion_features,
     load_long_fusion_gate,
 )
+from .query_memory import DynamicQueryMemoryBank, QueryMemoryEntry
 from .model import (
     LongFusionContext,
     TrackingResult,

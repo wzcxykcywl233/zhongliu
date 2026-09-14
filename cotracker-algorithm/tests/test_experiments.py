@@ -194,6 +194,36 @@ class ExperimentTests(unittest.TestCase):
                 "dual_anchor_weight": 0.5,
                 "long_fusion_gate": "mamba",
             },
+            "hierarchical_full_grid0_iterations2_memory_latest": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "query_memory_mode": "latest",
+                "query_memory_slots": 2,
+            },
+            "hierarchical_full_grid0_iterations2_memory_topk": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "query_memory_mode": "topk_confidence",
+                "query_memory_slots": 4,
+            },
+            "hierarchical_full_grid0_iterations2_memory_topk_diverse": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "query_memory_mode": "topk_confidence_diversity",
+                "query_memory_slots": 4,
+            },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         names = [field.name for field in fields(ExperimentConfig)]
@@ -237,6 +267,27 @@ class ExperimentTests(unittest.TestCase):
             ExperimentConfig(long_fusion_gate="mamba")
         with self.assertRaisesRegex(ValueError, "must be none, mlp, or mamba"):
             ExperimentConfig(long_fusion_gate="transformer")
+
+    def test_query_memory_requires_hierarchical_feature_weighting(self) -> None:
+        with self.assertRaisesRegex(ValueError, "hierarchical"):
+            ExperimentConfig(
+                original_feature_weight=0.5,
+                query_memory_mode="latest",
+                query_memory_slots=2,
+            )
+        with self.assertRaisesRegex(ValueError, "feature weighting"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                query_memory_mode="latest",
+                query_memory_slots=2,
+            )
+        with self.assertRaisesRegex(ValueError, "at least two"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                original_feature_weight=0.5,
+                query_memory_mode="latest",
+                query_memory_slots=1,
+            )
 
     def test_long_fusion_protocol_uses_real_labels_and_no_teacher(self) -> None:
         manifest_path = (
@@ -287,6 +338,34 @@ class ExperimentTests(unittest.TestCase):
             manifest["reporting"]["primary_reference"],
             "hierarchical_full_grid0",
         )
+
+    def test_dynamic_query_memory_protocol_is_frozen_and_teacher_free(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "dynamic-query-memory-40-10-38.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        protocol = manifest["protocol"]
+        profiles = [entry["name"] for entry in manifest["profiles"]]
+
+        self.assertEqual(
+            (protocol["training_cases"], protocol["validation_cases"], protocol["test_cases"]),
+            (40, 10, 38),
+        )
+        self.assertFalse(protocol["uses_training_labels"])
+        self.assertIsNone(protocol["teacher_model"])
+        self.assertFalse(protocol["soft_confidence_labels"])
+        self.assertEqual(profiles[0], "hierarchical_full_grid0_iterations2")
+        self.assertEqual(
+            profiles[1:],
+            [
+                "hierarchical_full_grid0_iterations2_memory_latest",
+                "hierarchical_full_grid0_iterations2_memory_topk",
+                "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+            ],
+        )
+        self.assertTrue(set(profiles) <= set(HIERARCHICAL_EXPERIMENTS))
 
     def test_official_experiment_registry_is_consistent(self) -> None:
         registry_path = (
@@ -376,6 +455,9 @@ class ExperimentTests(unittest.TestCase):
                 "hierarchical_full_grid0_mamba_replacement",
                 "hierarchical_full_grid0_iterations2_mlp_gate",
                 "hierarchical_full_grid0_iterations2_mamba_gate",
+                "hierarchical_full_grid0_iterations2_memory_latest",
+                "hierarchical_full_grid0_iterations2_memory_topk",
+                "hierarchical_full_grid0_iterations2_memory_topk_diverse",
             },
         )
 

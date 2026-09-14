@@ -9,6 +9,11 @@ from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOff
 
 from tuning import interpolate_keyframes
 
+try:
+    from .query_memory import DynamicQueryMemoryBank
+except ImportError:  # pragma: no cover - standalone test/module loading
+    from query_memory import DynamicQueryMemoryBank
+
 logger = logging.getLogger(__name__)
 
 
@@ -567,6 +572,12 @@ def hierarchical_forward_pass(
     feature_gate_distance: float = 0.0,
     feature_similarity_threshold: float = 0.5,
     feature_revalidate_radius: int = 0,
+    query_memory_mode: str = "none",
+    query_memory_slots: int = 0,
+    query_memory_min_reliability: float = 0.5,
+    query_memory_min_similarity: float = 0.5,
+    query_memory_original_floor: float = 0.3,
+    query_memory_diversity_weight: float = 0.25,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -586,6 +597,10 @@ def hierarchical_forward_pass(
         raise ValueError("feature gating requires original feature memory")
     if feature_revalidate_radius > 0 and feature_gate_distance <= 0:
         raise ValueError("feature revalidation requires feature gating")
+    if query_memory_mode != "none" and original_feature_weight <= 0:
+        raise ValueError("query memory requires query feature weighting")
+    if query_memory_mode == "none" and query_memory_slots != 0:
+        raise ValueError("query memory slots require an active memory mode")
     if video.ndim != 5 or queries.ndim != 3:
         raise ValueError("unexpected video or query shape")
 
@@ -650,6 +665,34 @@ def hierarchical_forward_pass(
     start = 0
     level = 0
     validation_enabled = feature_gate_distance > 0
+    query_memory = None
+    if query_memory_mode != "none":
+        query_memory = DynamicQueryMemoryBank(
+            mode=query_memory_mode,
+            capacity=query_memory_slots,
+            min_reliability=query_memory_min_reliability,
+            min_similarity=query_memory_min_similarity,
+            original_floor=query_memory_original_floor,
+            diversity_weight=query_memory_diversity_weight,
+            diagnostics=diagnostics,
+        )
+        if diagnostics is not None:
+            diagnostics["query_memory_enabled"] = 1
+            diagnostics["query_memory_capacity"] = query_memory_slots
+            for key in (
+                "query_memory_write_candidates",
+                "query_memory_writes_accepted",
+                "query_memory_writes_rejected_reliability",
+                "query_memory_writes_rejected_similarity",
+                "query_memory_duplicate_frames",
+                "query_memory_evictions",
+                "query_memory_fusions",
+                "query_memory_slots_used_sum",
+                "query_memory_slots_used_max",
+                "query_memory_bank_size_max",
+                "query_memory_original_weight_sum",
+            ):
+                diagnostics[key] = 0
 
     def run_level(level_start, level_end, level_queries):
         nonlocal original_memory
@@ -659,18 +702,25 @@ def hierarchical_forward_pass(
             "hierarchical_level_frame_visits",
             level_end - level_start + 1,
         )
+        history_memory = (
+            query_memory.fused_memory()
+            if query_memory is not None
+            else original_memory
+        )
         capture_memory = (
             (original_feature_weight > 0 or validation_enabled)
             and original_memory is None
         )
-        return_memory = capture_memory or validation_enabled
+        return_memory = (
+            query_memory is not None or capture_memory or validation_enabled
+        )
         result, captured, frame_features = _run_single_clip(
             model,
             video[:, level_start : level_end + 1],
             level_queries,
             support_grid_size=support_grid_size,
             n_iterations=n_iterations,
-            query_feature_memory=original_memory,
+            query_feature_memory=history_memory,
             query_feature_weight=original_feature_weight,
             return_query_feature_memory=return_memory,
             return_frame_features=validation_enabled,
@@ -793,7 +843,32 @@ def hierarchical_forward_pass(
                 result = fuse_tracking_results(
                     result, global_slice, dual_anchor_weight
                 )
-        return result
+        return result, captured
+
+    def commit_query_memory(level_start, result, captured):
+        if query_memory is None or captured is None:
+            return
+        if level_start == 0:
+            reliability = 1.0
+        elif bool(covered[level_start].item()):
+            reliability = float(
+                (
+                    visibility[:, level_start]
+                    * confidence[:, level_start]
+                ).mean().item()
+            )
+        else:
+            reliability = float(
+                (result.visibility[:, 0] * result.confidence[:, 0]).mean().item()
+            )
+        accepted = query_memory.add(level_start, captured, reliability)
+        logger.info(
+            "Query memory anchor frame=%d reliability=%.4f accepted=%s bank=%s",
+            level_start,
+            reliability,
+            accepted,
+            query_memory.frame_indices,
+        )
 
     def store_level(level_start, level_end, result):
         trajectories[:, level_start : level_end + 1] = result.trajectories
@@ -804,7 +879,7 @@ def hierarchical_forward_pass(
     while start < total_frames - 1:
         end = min(start + span, total_frames - 1)
         logger.info("Hierarchical matching level %d: frames %d-%d", level, start, end)
-        level_result = run_level(start, end, current_queries)
+        level_result, level_memory = run_level(start, end, current_queries)
 
         should_merge = (
             occlusion_merge
@@ -827,7 +902,10 @@ def hierarchical_forward_pass(
                 merge_start,
                 merge_end,
             )
-            merged_result = run_level(merge_start, merge_end, merge_queries)
+            merged_result, merged_memory = run_level(
+                merge_start, merge_end, merge_queries
+            )
+            commit_query_memory(merge_start, merged_result, merged_memory)
             store_level(merge_start, merge_end, merged_result)
             start = merge_end
             current_queries = torch.cat(
@@ -842,6 +920,7 @@ def hierarchical_forward_pass(
             level += 1
             continue
 
+        commit_query_memory(start, level_result, level_memory)
         store_level(start, end, level_result)
         previous_start = start
         previous_queries = current_queries.clone()

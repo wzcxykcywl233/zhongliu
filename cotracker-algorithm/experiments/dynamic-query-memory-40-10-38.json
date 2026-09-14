@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "status": "exploratory",
+  "mechanism": "parameter-free bounded dynamic query-feature memory",
+  "protocol": {
+    "training_dataset": "trackrad2025_labeled_train_40",
+    "selection_dataset": "trackrad2025_labeled_validation_10",
+    "final_evaluation_dataset": "trackrad2025_labeled_public_test_38",
+    "training_cases": 40,
+    "validation_cases": 10,
+    "test_cases": 38,
+    "uses_training_labels": false,
+    "uses_validation_labels_for_selection": true,
+    "uses_test_labels_for_selection": false,
+    "teacher_model": null,
+    "soft_confidence_labels": false
+  },
+  "fixed_control": "hierarchical_full_grid0_iterations2",
+  "fixed_settings": {
+    "hierarchical_span": 10,
+    "original_feature_weight": 0.5,
+    "support_grid_size": 0,
+    "n_iterations": 2,
+    "occlusion_merge": true,
+    "dual_anchor_weight": 0.5,
+    "temporal_stride": 1
+  },
+  "memory_policy": {
+    "first_anchor_is_permanent": true,
+    "candidate_reliability": "mean(visibility * confidence) at the accepted level boundary",
+    "minimum_reliability": 0.5,
+    "minimum_cosine_similarity_to_first_anchor": 0.5,
+    "candidate_quality": "0.6 * reliability + 0.4 * ((cosine_similarity + 1) / 2)",
+    "first_anchor_fusion_floor": 0.3,
+    "historical_memory_weight_in_cotracker": 0.5,
+    "current_query_feature_weight_in_cotracker": 0.5,
+    "write_after_occlusion_recovery_only": true
+  },
+  "profiles": [
+    {
+      "name": "hierarchical_full_grid0_iterations2",
+      "role": "direct fixed control",
+      "memory_mode": "none",
+      "slots": 0
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_latest",
+      "role": "latest reliable anchor ablation",
+      "memory_mode": "latest",
+      "slots": 2
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk",
+      "role": "reliability-ranked multi-anchor memory",
+      "memory_mode": "topk_confidence",
+      "slots": 4
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+      "role": "reliability and appearance-diversity multi-anchor memory",
+      "memory_mode": "topk_confidence_diversity",
+      "slots": 4,
+      "diversity_weight": 0.25
+    }
+  ],
+  "reporting": {
+    "primary_reference": "hierarchical_full_grid0_iterations2",
+    "selection_split": "selection_dataset",
+    "locked_reporting_split": "final_evaluation_dataset",
+    "metric_directions": {
+      "DSC": "higher",
+      "HD95": "lower",
+      "MASD": "lower",
+      "CD": "lower",
+      "D98": "higher"
+    },
+    "required_diagnostics": [
+      "query_memory_write_candidates",
+      "query_memory_writes_accepted",
+      "query_memory_writes_rejected_reliability",
+      "query_memory_writes_rejected_similarity",
+      "query_memory_evictions",
+      "query_memory_fusions",
+      "query_memory_slots_used_max",
+      "query_memory_bank_size_max"
+    ]
+  }
+}
