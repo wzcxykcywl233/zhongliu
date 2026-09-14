@@ -42,6 +42,9 @@ class ExperimentConfig:
     query_memory_min_similarity: float = 0.5
     query_memory_original_floor: float = 0.3
     query_memory_diversity_weight: float = 0.25
+    mask_appearance_radius: int = 0
+    mask_appearance_min_gain: float = 0.01
+    mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
         if self.border_points < 3:
@@ -104,6 +107,23 @@ class ExperimentConfig:
             raise ValueError("query_memory_min_similarity must be in [-1, 1]")
         if self.query_memory_diversity_weight < 0:
             raise ValueError("query_memory_diversity_weight must be non-negative")
+        if self.mask_appearance_radius < 0:
+            raise ValueError("mask_appearance_radius must be non-negative")
+        if self.mask_appearance_min_gain < 0:
+            raise ValueError("mask_appearance_min_gain must be non-negative")
+        if self.mask_appearance_displacement_penalty < 0:
+            raise ValueError(
+                "mask_appearance_displacement_penalty must be non-negative"
+            )
+        if self.mask_appearance_radius > 0:
+            if self.hierarchical_span == 0 or self.dual_anchor_weight == 0:
+                raise ValueError(
+                    "mask appearance validation requires hierarchical dual anchor tracking"
+                )
+            if self.long_fusion_gate != "none":
+                raise ValueError(
+                    "mask appearance validation and long fusion gate are separate studies"
+                )
         for name, value in (
             ("original_feature_weight", self.original_feature_weight),
             ("occlusion_visibility_threshold", self.occlusion_visibility_threshold),
@@ -321,6 +341,28 @@ HIERARCHICAL_EXPERIMENTS: dict[str, ExperimentConfig] = {
         dual_anchor_weight=0.5,
         query_memory_mode="topk_confidence_diversity",
         query_memory_slots=4,
+    ),
+    "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        query_memory_mode="topk_confidence",
+        query_memory_slots=4,
+        mask_appearance_radius=4,
+    ),
+    "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8": ExperimentConfig(
+        hierarchical_span=10,
+        original_feature_weight=0.5,
+        support_grid_size=0,
+        n_iterations=2,
+        occlusion_merge=True,
+        dual_anchor_weight=0.5,
+        query_memory_mode="topk_confidence",
+        query_memory_slots=4,
+        mask_appearance_radius=8,
     ),
 }
 

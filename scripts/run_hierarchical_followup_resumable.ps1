@@ -265,6 +265,16 @@ try {
                             throw "$Profile/$CaseId did not report an accepted query-memory anchor"
                         }
                     }
+                    if ($Profile -like "*_mask_appearance_*") {
+                        $AppearanceFrames = $Diagnostic.mechanism.mask_appearance_frames
+                        $AppearanceCandidates = $Diagnostic.mechanism.mask_appearance_candidate_evaluations
+                        if ($null -eq $AppearanceFrames -or [int]$AppearanceFrames -le 0) {
+                            throw "$Profile/$CaseId did not report mask appearance frames"
+                        }
+                        if ($null -eq $AppearanceCandidates -or [int]$AppearanceCandidates -le 0) {
+                            throw "$Profile/$CaseId did not activate mask appearance candidates"
+                        }
+                    }
                     $OutputHash = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
                     $Diagnostic.prediction |
                         Add-Member -NotePropertyName output_file_sha256 `

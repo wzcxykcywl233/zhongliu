@@ -128,7 +128,14 @@ def run_algorithm(
             numeric_diagnostics["mamba_time_replacement_enabled"] = int(
                 config.mamba_replace_time_attention
             )
+            numeric_diagnostics["mask_appearance_enabled"] = int(
+                config.mask_appearance_radius > 0
+            )
+            numeric_diagnostics["mask_appearance_radius"] = (
+                config.mask_appearance_radius
+            )
 
+        mask_appearance_features = None
         if config.hierarchical_span > 0:
             tracking_output = resources.hierarchical_forward_pass(
                 model=model,
@@ -159,9 +166,16 @@ def run_algorithm(
                 ),
                 diagnostics=numeric_diagnostics,
                 return_long_fusion_context=config.long_fusion_gate != "none",
+                return_mask_appearance_context=(
+                    config.mask_appearance_radius > 0
+                ),
             )
             if config.long_fusion_gate == "none":
-                tracking = tracking_output
+                if config.mask_appearance_radius > 0:
+                    tracking = tracking_output.tracking
+                    mask_appearance_features = tracking_output.frame_features
+                else:
+                    tracking = tracking_output
             else:
                 gate_checkpoint = os.environ.get("COTRACKER_FUSION_GATE_CHECKPOINT")
                 if not gate_checkpoint:
@@ -276,6 +290,27 @@ def run_algorithm(
             keep_largest_component=config.keep_largest_component,
             diagnostics=numeric_diagnostics,
         )  # should now be B, T, C, H, W
+        if config.mask_appearance_radius > 0:
+            if mask_appearance_features is None:
+                raise RuntimeError("mask appearance frame features are unavailable")
+            prediction = resources.refine_masks_by_appearance(
+                prediction,
+                query > 0.5,
+                mask_appearance_features,
+                radius_pixels=config.mask_appearance_radius,
+                feature_stride=model.stride,
+                minimum_similarity_gain=config.mask_appearance_min_gain,
+                displacement_penalty=(
+                    config.mask_appearance_displacement_penalty
+                ),
+                diagnostics=numeric_diagnostics,
+            )
+            if numeric_diagnostics is not None:
+                logger.info(
+                    "Mask appearance corrected %d/%d frames",
+                    numeric_diagnostics["mask_appearance_corrected_frames"],
+                    numeric_diagnostics["mask_appearance_frames"],
+                )
         logger.info("after TAP->SEG conversion:")
         logger.info(f"\tprediction.shape={prediction.shape}")
 

@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "status": "exploratory",
+  "mechanism": "frozen CoTracker feature mask-level appearance validation",
+  "protocol": {
+    "training_dataset": "trackrad2025_labeled_train_40",
+    "selection_dataset": "trackrad2025_labeled_validation_10",
+    "final_evaluation_dataset": "trackrad2025_labeled_public_test_38",
+    "training_cases": 40,
+    "validation_cases": 10,
+    "test_cases": 38,
+    "uses_training_labels": false,
+    "teacher_model": null,
+    "soft_confidence_labels": false
+  },
+  "fixed_control": "hierarchical_full_grid0_iterations2_memory_topk",
+  "fixed_settings": {
+    "hierarchical_span": 10,
+    "original_feature_weight": 0.5,
+    "support_grid_size": 0,
+    "n_iterations": 2,
+    "occlusion_merge": true,
+    "dual_anchor_weight": 0.5,
+    "query_memory_mode": "topk_confidence",
+    "query_memory_slots": 4,
+    "mask_appearance_min_gain": 0.01,
+    "mask_appearance_displacement_penalty": 0.01,
+    "feature_stride_pixels": 4
+  },
+  "appearance_policy": {
+    "reference": "mean normalized frozen CoTracker feature inside the first-frame ground-truth mask",
+    "candidate": "mean normalized frozen CoTracker feature inside each translated predicted mask",
+    "similarity": "cosine similarity",
+    "shape_change": "none; whole-mask translation only",
+    "boundary_clipping": "rejected",
+    "acceptance": "penalized similarity gain >= 0.01",
+    "query_frame_correction": false
+  },
+  "profiles": [
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk",
+      "role": "direct fixed control",
+      "search_radius_pixels": 0
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4",
+      "role": "conservative mask-level appearance validation",
+      "search_radius_pixels": 4
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8",
+      "role": "broader mask-level appearance validation",
+      "search_radius_pixels": 8
+    }
+  ],
+  "reporting": {
+    "primary_reference": "hierarchical_full_grid0_iterations2_memory_topk",
+    "metric_directions": {
+      "DSC": "higher",
+      "HD95": "lower",
+      "MASD": "lower",
+      "CD": "lower",
+      "D98": "higher"
+    },
+    "required_diagnostics": [
+      "mask_appearance_enabled",
+      "mask_appearance_radius",
+      "mask_appearance_frames",
+      "mask_appearance_candidate_evaluations",
+      "mask_appearance_corrected_frames",
+      "mask_appearance_shift_pixels_sum",
+      "mask_appearance_similarity_gain_sum",
+      "mask_appearance_similarity_gain_max"
+    ]
+  }
+}

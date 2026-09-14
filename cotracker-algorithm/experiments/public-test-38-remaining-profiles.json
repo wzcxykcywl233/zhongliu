@@ -60,6 +60,14 @@
     {
       "name": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
       "reason": "Dynamic query-memory profile; evaluated by the dedicated 40/10/38 memory queue."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4",
+      "reason": "Mask-level appearance validation profile; evaluated by its dedicated 40/10/38 queue."
+    },
+    {
+      "name": "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8",
+      "reason": "Mask-level appearance validation profile; evaluated by its dedicated 40/10/38 queue."
     }
   ]
 }

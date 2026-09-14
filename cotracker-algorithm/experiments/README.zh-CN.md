@@ -233,6 +233,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
 可靠性和首帧特征相似度门槛；失败的遮挡短级不会写入记忆。完整公式、冻结参数
 及 40/10/38 断电续跑命令见 `DYNAMIC_QUERY_MEMORY.zh-CN.md`。
 
+## 掩膜级外观校验
+
+以验证集选出的可靠性 Top-K 多锚点方案为固定对照，使用冻结 CoTracker 特征
+检查后续预测掩膜与首帧目标外观是否一致。只允许半径 4 或 8 像素的整体平移，
+保持掩膜形状与面积；相似度收益不足时维持原输出。设计、诊断和断电续跑命令见
+`MASK_APPEARANCE_VALIDATION.zh-CN.md`。
+
 ## 全量可审计复验
 
 `scripts/run_full_audit_resumable.ps1` 会重新运行全部往期实验，并额外运行

@@ -224,6 +224,28 @@ class ExperimentTests(unittest.TestCase):
                 "query_memory_mode": "topk_confidence_diversity",
                 "query_memory_slots": 4,
             },
+            "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "query_memory_mode": "topk_confidence",
+                "query_memory_slots": 4,
+                "mask_appearance_radius": 4,
+            },
+            "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8": {
+                "hierarchical_span": 10,
+                "original_feature_weight": 0.5,
+                "support_grid_size": 0,
+                "n_iterations": 2,
+                "occlusion_merge": True,
+                "dual_anchor_weight": 0.5,
+                "query_memory_mode": "topk_confidence",
+                "query_memory_slots": 4,
+                "mask_appearance_radius": 8,
+            },
         }
         self.assertEqual(set(HIERARCHICAL_EXPERIMENTS), set(expected))
         names = [field.name for field in fields(ExperimentConfig)]
@@ -287,6 +309,20 @@ class ExperimentTests(unittest.TestCase):
                 original_feature_weight=0.5,
                 query_memory_mode="latest",
                 query_memory_slots=1,
+            )
+
+    def test_mask_appearance_requires_hierarchical_dual_anchor_features(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dual anchor"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                mask_appearance_radius=4,
+            )
+        with self.assertRaisesRegex(ValueError, "separate studies"):
+            ExperimentConfig(
+                hierarchical_span=10,
+                dual_anchor_weight=0.5,
+                long_fusion_gate="mlp",
+                mask_appearance_radius=4,
             )
 
     def test_long_fusion_protocol_uses_real_labels_and_no_teacher(self) -> None:
@@ -363,6 +399,37 @@ class ExperimentTests(unittest.TestCase):
                 "hierarchical_full_grid0_iterations2_memory_latest",
                 "hierarchical_full_grid0_iterations2_memory_topk",
                 "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+            ],
+        )
+        self.assertTrue(set(profiles) <= set(HIERARCHICAL_EXPERIMENTS))
+
+    def test_mask_appearance_protocol_uses_frozen_cotracker_features(self) -> None:
+        manifest_path = (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "mask-appearance-40-10-38.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        protocol = manifest["protocol"]
+        profiles = [entry["name"] for entry in manifest["profiles"]]
+
+        self.assertEqual(
+            (protocol["training_cases"], protocol["validation_cases"], protocol["test_cases"]),
+            (40, 10, 38),
+        )
+        self.assertFalse(protocol["uses_training_labels"])
+        self.assertIsNone(protocol["teacher_model"])
+        self.assertFalse(protocol["soft_confidence_labels"])
+        self.assertEqual(
+            manifest["fixed_control"],
+            "hierarchical_full_grid0_iterations2_memory_topk",
+        )
+        self.assertEqual(
+            profiles,
+            [
+                "hierarchical_full_grid0_iterations2_memory_topk",
+                "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4",
+                "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8",
             ],
         )
         self.assertTrue(set(profiles) <= set(HIERARCHICAL_EXPERIMENTS))
@@ -458,6 +525,8 @@ class ExperimentTests(unittest.TestCase):
                 "hierarchical_full_grid0_iterations2_memory_latest",
                 "hierarchical_full_grid0_iterations2_memory_topk",
                 "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+                "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4",
+                "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8",
             },
         )
 

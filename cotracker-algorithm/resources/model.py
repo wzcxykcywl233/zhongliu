@@ -54,6 +54,11 @@ class LongFusionContext(NamedTuple):
     global_similarity: torch.Tensor
 
 
+class MaskAppearanceContext(NamedTuple):
+    tracking: TrackingResult
+    frame_features: torch.Tensor
+
+
 def setup_model(
     checkpoint: str = "cotracker3_offline",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -580,8 +585,9 @@ def hierarchical_forward_pass(
     query_memory_diversity_weight: float = 0.25,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
+    return_mask_appearance_context: bool = False,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-) -> TrackingResult | LongFusionContext:
+) -> TrackingResult | LongFusionContext | MaskAppearanceContext:
     """Track short levels, re-anchor at endpoints, and optionally merge occlusions."""
     if span < 1:
         raise ValueError("span must be positive")
@@ -601,6 +607,8 @@ def hierarchical_forward_pass(
         raise ValueError("query memory requires query feature weighting")
     if query_memory_mode == "none" and query_memory_slots != 0:
         raise ValueError("query memory slots require an active memory mode")
+    if return_long_fusion_context and return_mask_appearance_context:
+        raise ValueError("select exactly one hierarchical feature context")
     if video.ndim != 5 or queries.ndim != 3:
         raise ValueError("unexpected video or query shape")
 
@@ -614,28 +622,33 @@ def hierarchical_forward_pass(
         diagnostics["hierarchical_point_count"] = point_count
         diagnostics["hierarchical_total_frames"] = total_frames
     if total_frames == 1:
-        result, _, _ = _run_single_clip(
+        result, _, frame_features = _run_single_clip(
             model,
             video,
             queries,
             support_grid_size=support_grid_size,
             n_iterations=n_iterations,
+            return_frame_features=return_mask_appearance_context,
             device=device,
         )
+        if return_mask_appearance_context:
+            if frame_features is None:
+                raise RuntimeError("mask appearance context requires frame features")
+            return MaskAppearanceContext(result, frame_features)
         return result
 
     global_result = None
     global_memory = None
     global_frame_features = None
     if dual_anchor_weight > 0:
-        if return_long_fusion_context:
+        if return_long_fusion_context or return_mask_appearance_context:
             global_result, global_memory, global_frame_features = _run_single_clip(
                 model,
                 video,
                 queries,
                 support_grid_size=support_grid_size,
                 n_iterations=n_iterations,
-                return_query_feature_memory=True,
+                return_query_feature_memory=return_long_fusion_context,
                 return_frame_features=True,
                 device=device,
             )
@@ -938,6 +951,10 @@ def hierarchical_forward_pass(
         raise RuntimeError("hierarchical tracker did not cover every frame")
 
     hierarchical = TrackingResult(trajectories, visibility, confidence)
+    if return_mask_appearance_context:
+        if global_frame_features is None:
+            raise RuntimeError("mask appearance context requires global frame features")
+        return MaskAppearanceContext(hierarchical, global_frame_features)
     if not return_long_fusion_context:
         return hierarchical
     if global_result is None or global_memory is None or global_frame_features is None:

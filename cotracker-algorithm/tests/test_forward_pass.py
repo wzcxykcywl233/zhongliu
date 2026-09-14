@@ -51,6 +51,7 @@ class HierarchicalFakeCoTracker:
         query_feature_memory=None,
         query_feature_weight=0.0,
         return_query_feature_memory=False,
+        return_frame_features=False,
     ):
         del iters, is_train
         self.calls.append(
@@ -72,11 +73,16 @@ class HierarchicalFakeCoTracker:
             visibility[:, 1:] = 0.0
         confidence = torch.ones_like(visibility)
         result = (coordinates, visibility, confidence, None)
+        extras = []
         if return_query_feature_memory:
             track = torch.ones((batch, points, 4), dtype=video.dtype)
             support = torch.ones((batch, 1, points, 4), dtype=video.dtype)
-            return result + (([track], [support]),)
-        return result
+            extras.append(([track], [support]))
+        if return_frame_features:
+            extras.append(
+                torch.ones((batch, frames, 4, 2, 2), dtype=video.dtype)
+            )
+        return result + tuple(extras)
 
 
 class ForwardPassTests(unittest.TestCase):
@@ -211,6 +217,24 @@ class ForwardPassTests(unittest.TestCase):
         )
         self.assertEqual(diagnostics["query_memory_writes_accepted"], 1)
         self.assertEqual(diagnostics["query_memory_duplicate_frames"], 1)
+
+    def test_mask_appearance_context_returns_frozen_frame_features(self) -> None:
+        model = HierarchicalFakeCoTracker()
+        video = torch.zeros((1, 5, 1, 8, 8))
+        queries = torch.tensor([[[0.0, 1.0, 2.0]]])
+        context = resource_model.hierarchical_forward_pass(
+            model,
+            video,
+            queries,
+            span=2,
+            support_grid_size=0,
+            dual_anchor_weight=0.5,
+            return_mask_appearance_context=True,
+            device="cpu",
+        )
+        self.assertIsInstance(context, resource_model.MaskAppearanceContext)
+        self.assertEqual(context.tracking.trajectories.shape, (1, 5, 1, 2))
+        self.assertEqual(context.frame_features.shape, (1, 5, 4, 2, 2))
 
     def test_feature_gate_selects_appearance_consistent_branch_when_far(self) -> None:
         local = resource_model.TrackingResult(

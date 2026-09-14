@@ -146,6 +146,23 @@ per-case boundary after interruption. See
 `cotracker-algorithm/experiments/DYNAMIC_QUERY_MEMORY.zh-CN.md` for the frozen
 design.
 
+### Run mask-level appearance validation
+
+This parameter-free follow-up keeps the validation-selected Top-K query memory
+and uses frozen CoTracker frame features to validate each predicted mask against
+the first-frame target appearance. It compares conservative four-pixel and
+eight-pixel whole-mask translation searches while preserving mask shape and
+area:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_mask_appearance_validation_resumable.ps1
+```
+
+The 10-case validation and 38-case test runs are checkpointed per case. Design
+details and required activation diagnostics are in
+`cotracker-algorithm/experiments/MASK_APPEARANCE_VALIDATION.zh-CN.md`.
+
 ### Run the supplementary 38-case queue
 
 The remaining registered inference profiles and the controlled auxiliary-

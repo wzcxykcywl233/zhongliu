@@ -3,6 +3,7 @@ __all__ = [
     "hierarchical_forward_pass",
     "TrackingResult",
     "LongFusionContext",
+    "MaskAppearanceContext",
     "setup_model",
     "apply_long_fusion_gate",
     "build_long_fusion_features",
@@ -10,6 +11,7 @@ __all__ = [
     "LONG_FUSION_FEATURE_DIM",
     "DynamicQueryMemoryBank",
     "QueryMemoryEntry",
+    "refine_masks_by_appearance",
     "convert_mask_to_points",
     "convert_points_to_mask",
     "convert_point_trajectory_to_mask_sequence",
@@ -23,8 +25,10 @@ from .long_fusion import (
     load_long_fusion_gate,
 )
 from .query_memory import DynamicQueryMemoryBank, QueryMemoryEntry
+from .mask_appearance import refine_masks_by_appearance
 from .model import (
     LongFusionContext,
+    MaskAppearanceContext,
     TrackingResult,
     forward_pass,
     hierarchical_forward_pass,

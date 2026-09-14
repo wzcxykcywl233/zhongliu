@@ -36,7 +36,9 @@
     "hierarchical_full_grid0_iterations2_mamba_gate",
     "hierarchical_full_grid0_iterations2_memory_latest",
     "hierarchical_full_grid0_iterations2_memory_topk",
-    "hierarchical_full_grid0_iterations2_memory_topk_diverse"
+    "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+    "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r4",
+    "hierarchical_full_grid0_iterations2_memory_topk_mask_appearance_r8"
   ],
   "policy": {
     "include_exploratory_in_official_ranking": false,
