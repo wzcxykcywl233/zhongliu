@@ -160,12 +160,18 @@ try {
                 }
 
                 if (Test-Path -LiteralPath $CompletedDir) {
-                    $Recovered = Join-Path $Attempts "$CaseId-incomplete-$([guid]::NewGuid())"
+                    # Keep transient paths below the legacy Windows MAX_PATH
+                    # boundary.  Long profile names plus a full GUID can exceed
+                    # 260 characters even though Docker successfully writes the
+                    # bind-mounted output.
+                    $RecoveryId = ([guid]::NewGuid().ToString("N")).Substring(0, 8)
+                    $Recovered = Join-Path $Attempts "$CaseId-incomplete-$RecoveryId"
                     Move-Item -LiteralPath $CompletedDir -Destination $Recovered
                     Write-RunMessage "Moved incomplete checkpoint: $Recovered"
                 }
 
-                $AttemptDir = Join-Path $Attempts "$CaseId-$([guid]::NewGuid())"
+                $AttemptId = ([guid]::NewGuid().ToString("N")).Substring(0, 8)
+                $AttemptDir = Join-Path $Attempts "$CaseId-$AttemptId"
                 $AttemptOutput = Join-Path $AttemptDir "output"
                 $CaseLog = Join-Path $AttemptDir "case.log"
                 New-Item -ItemType Directory -Force -Path $AttemptOutput | Out-Null
