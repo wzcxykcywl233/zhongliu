@@ -64,7 +64,7 @@ def collate_fn_train(batch):
     visibility = torch.stack([b.visibility for b, _ in batch], dim=0)
     valid = torch.stack([b.valid for b, _ in batch], dim=0)
     seq_name = [b.seq_name for b, _ in batch]
-    query_points = transforms = aug_video = None
+    query_points = transforms = aug_video = segmentation = None
     if batch[0][0].query_points is not None:
         query_points = torch.stack([b.query_points for b, _ in batch], dim=0)
 
@@ -73,6 +73,8 @@ def collate_fn_train(batch):
 
     if batch[0][0].aug_video is not None:
         aug_video = torch.stack([b.aug_video for b, _ in batch], dim=0)
+    if batch[0][0].segmentation is not None:
+        segmentation = torch.stack([b.segmentation for b, _ in batch], dim=0)
     return (
         CoTrackerData(
             video=video,
@@ -83,6 +85,7 @@ def collate_fn_train(batch):
             query_points=query_points,
             aug_video=aug_video,
             transforms=transforms,
+            segmentation=segmentation,
         ),
         gotit,
     )

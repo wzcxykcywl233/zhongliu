@@ -1,4 +1,4 @@
-"""TrackRAD MHA videos as unlabeled clips for pseudo-label fine-tuning."""
+"""TrackRAD MHA clips for pseudo-label and optional mask-assisted training."""
 
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ from cotracker.datasets.utils import CoTrackerData
 
 
 class TrackRADVideoDataset(torch.utils.data.Dataset):
-    """Load TrackRAD cases while deliberately ignoring target masks.
+    """Load TrackRAD cases with optional paired target-mask sequences.
 
-    CoTracker's real-video training creates pseudo labels from teacher models,
-    therefore only ``images/*_frames.mha`` is consumed.  The MHA time axis is
-    the first SimpleITK image dimension and consequently the last NumPy axis.
+    The default remains teacher-only pseudo-label training.  Ground-truth masks
+    are loaded only for explicitly configured mask-assisted experiments.  The
+    MHA time axis is the first SimpleITK image dimension and consequently the
+    last NumPy axis.
     """
 
     def __init__(
@@ -27,6 +28,7 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         traj_per_sample: int = 768,
         random_frame_rate: bool = False,
         limit_samples: int | None = None,
+        load_target_masks: bool = False,
     ) -> None:
         self.root = Path(root)
         if not self.root.is_dir():
@@ -44,6 +46,7 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         self.seq_len = seq_len
         self.traj_per_sample = traj_per_sample
         self.random_frame_rate = random_frame_rate
+        self.load_target_masks = load_target_masks
 
     @staticmethod
     def _robust_intensity_bounds(
@@ -81,23 +84,40 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         video = ((video - lower) / max(upper - lower, 1e-6)).clamp(0, 1)
         return video.mul(255.0)
 
-    def _sample_clip(self, video: torch.Tensor) -> torch.Tensor:
-        while video.shape[0] < self.seq_len:
-            video = torch.cat([video, video.flip(0)], dim=0)
-        max_rate = max(1, video.shape[0] // self.seq_len)
+    def _sample_indices(self, frame_count: int) -> torch.Tensor:
+        indices = torch.arange(frame_count)
+        while indices.shape[0] < self.seq_len:
+            indices = torch.cat([indices, indices.flip(0)], dim=0)
+        max_rate = max(1, indices.shape[0] // self.seq_len)
         rate = 1
         if self.random_frame_rate and max_rate > 1:
             rate = int(torch.randint(1, min(4, max_rate) + 1, ()).item())
         required = self.seq_len * rate
-        if video.shape[0] > required:
-            start = int(torch.randint(0, video.shape[0] - required + 1, ()).item())
+        if indices.shape[0] > required:
+            start = int(torch.randint(0, indices.shape[0] - required + 1, ()).item())
         else:
             start = 0
-        return video[start : start + required : rate][: self.seq_len]
+        return indices[start : start + required : rate][: self.seq_len]
+
+    def _sample_clip(self, video: torch.Tensor) -> torch.Tensor:
+        return video[self._sample_indices(video.shape[0])]
+
+    @staticmethod
+    def _read_mask_mha(path: Path) -> torch.Tensor:
+        import SimpleITK as sitk
+
+        array = sitk.GetArrayFromImage(sitk.ReadImage(str(path)))
+        if array.ndim != 3:
+            raise ValueError(f"Expected a 3D TrackRAD mask, got {array.shape}: {path}")
+        return torch.from_numpy(
+            np.ascontiguousarray(np.moveaxis(array, -1, 0) > 0)
+        )
 
     def __getitem__(self, index: int):
         path = self.files[index]
-        video = self._sample_clip(self._read_mha(path))
+        full_video = self._read_mha(path)
+        clip_indices = self._sample_indices(full_video.shape[0])
+        video = full_video[clip_indices]
         video = F.interpolate(
             video[:, None],
             size=self.crop_size,
@@ -112,6 +132,24 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
             valid=torch.ones(frames, self.traj_per_sample),
             seq_name=path.parent.parent.name,
         )
+        if self.load_target_masks:
+            case_id = path.parent.parent.name
+            mask_path = path.parent.parent / "targets" / f"{case_id}_labels.mha"
+            if not mask_path.is_file():
+                raise FileNotFoundError(
+                    f"Mask-assisted training requires full labels: {mask_path}"
+                )
+            full_masks = self._read_mask_mha(mask_path)
+            if full_masks.shape != full_video.shape:
+                raise ValueError(
+                    "TrackRAD frame/mask shape mismatch: "
+                    f"{full_video.shape} vs {full_masks.shape} in {case_id}"
+                )
+            sample.segmentation = F.interpolate(
+                full_masks[clip_indices, None].float(),
+                size=self.crop_size,
+                mode="nearest",
+            )
         return sample, True
 
     def __len__(self) -> int:

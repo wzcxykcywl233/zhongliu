@@ -5,6 +5,7 @@ import types
 import unittest
 
 import numpy as np
+import torch
 
 
 # The bounds helper does not need CoTrackerData, but the dataset module imports
@@ -49,6 +50,13 @@ class TrackRADVideoDatasetTests(unittest.TestCase):
         )
         self.assertEqual(lower, 1.0)
         self.assertEqual(upper, 2.0)
+
+    def test_clip_indices_can_pair_frames_and_masks(self):
+        dataset = object.__new__(trackrad_dataset.TrackRADVideoDataset)
+        dataset.seq_len = 4
+        dataset.random_frame_rate = False
+        indices = dataset._sample_indices(2)
+        self.assertTrue(torch.equal(indices, torch.tensor([0, 1, 1, 0])))
 
 
 if __name__ == "__main__":

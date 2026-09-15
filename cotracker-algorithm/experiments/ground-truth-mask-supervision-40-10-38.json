@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "study": "ground-truth-mask-membership-supervision",
+  "protocol": {
+    "training_cases": 40,
+    "validation_cases": 10,
+    "test_cases": 38,
+    "test_is_not_used_for_selection": true
+  },
+  "student_initialization": "scaled_offline.pth",
+  "primary_teacher_sampling": {
+    "teachers": [
+      "cotracker2v1",
+      "online_cotracker_three",
+      "offline_cotracker_three"
+    ],
+    "one_teacher_per_batch": true,
+    "auxiliary_teacher": false,
+    "teacher_sequence_paired_across_profiles": true,
+    "training_case_sequence_paired_across_profiles": true,
+    "query_sequence_paired_across_profiles": true
+  },
+  "profiles": {
+    "control": 0.0,
+    "mask_w0025": 0.025,
+    "mask_w005": 0.05,
+    "mask_w010": 0.1
+  },
+  "mask_objective": {
+    "source": "per-frame TrackRAD ground-truth masks from the training-40 split only",
+    "query_identity": "inside or outside the target at each point's query frame",
+    "constraint": "the tracked point should preserve that target-membership identity in every non-query frame",
+    "probability_field": "nine-by-nine average-smoothed binary ground-truth mask",
+    "class_balance": "inside and outside losses are averaged separately and then equally weighted",
+    "loss": "binary cross entropy sampled differentiably at student coordinates and normalized to the bounded range [0,1]"
+  },
+  "training": {
+    "steps": 1000,
+    "sequence_length": 10,
+    "trajectories_per_sample": 384,
+    "iterations": 4,
+    "learning_rate": 0.00005,
+    "confidence_labels": "hard",
+    "soft_labels": false,
+    "atomic_checkpoint_every_steps": 25
+  },
+  "selection": {
+    "split": "validation-10",
+    "primary_metric": "DSC",
+    "tie_breakers": ["HD95", "MASD", "CD", "D98"],
+    "test_profiles": "teacher-only control plus the best nonzero mask weight"
+  },
+  "evaluation_inference_profile": "hierarchical_full_grid0_iterations2_memory_topk"
+}

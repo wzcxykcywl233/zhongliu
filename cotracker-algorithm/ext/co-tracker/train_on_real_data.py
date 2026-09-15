@@ -7,6 +7,7 @@
 import os
 import random
 import copy
+import hashlib
 import torch
 import signal
 import socket
@@ -51,6 +52,7 @@ from cotracker.utils.confidence_head_tuning import (
     trainable_parameter_count,
     trainable_parameter_names,
 )
+from cotracker.utils.mask_supervision import mask_membership_consistency_loss
 from cotracker.models.core.cotracker.mamba_time import (
     attach_trajectory_mamba_refiner,
     replace_updateformer_time_attention,
@@ -298,6 +300,23 @@ def _forward_batch_single_teacher(
             )
             output["flow_invisible"] = {"loss": seq_loss_invisible.mean() * 0.01}
 
+        if args.trackrad_mask_supervision_weight > 0.0:
+            if batch.segmentation is None:
+                raise RuntimeError(
+                    "TrackRAD mask supervision is enabled but the batch has no masks"
+                )
+            mask_loss, mask_metrics = mask_membership_consistency_loss(
+                batch.segmentation,
+                queries,
+                tracks,
+                valid=valid_mask,
+                blur_radius=args.trackrad_mask_blur_radius,
+            )
+            output["mask_supervision"] = {
+                "loss": mask_loss * args.trackrad_mask_supervision_weight,
+                "metrics": mask_metrics,
+            }
+
         return output
     else:
         predictions, visibility, train_data = model(
@@ -441,6 +460,13 @@ def forward_batch(batch, model, args, teacher_models, teacher_sampler):
         selection.primary,
     )
     primary_loss = _sum_output_losses(primary_output)
+    mask_supervision = primary_output.get("mask_supervision", {})
+    weighted_mask_loss = mask_supervision.get("loss")
+    primary_teacher_loss = (
+        primary_loss
+        if weighted_mask_loss is None
+        else primary_loss - weighted_mask_loss
+    )
     auxiliary_loss = None
 
     if selection.auxiliary is not None:
@@ -486,12 +512,27 @@ def forward_batch(batch, model, args, teacher_models, teacher_sampler):
     primary_output["teacher_sampling"] = {
         "primary_index": selection.primary,
         "auxiliary_index": selection.auxiliary,
-        "primary_loss_value": float(primary_loss.detach().cpu()),
+        "primary_loss_value": float(primary_teacher_loss.detach().cpu()),
+        "total_loss_value": float(primary_loss.detach().cpu()),
         "auxiliary_loss_value": (
             None
             if auxiliary_loss is None
             else float(auxiliary_loss.detach().cpu())
         ),
+        "mask_supervision_loss_value": (
+            None
+            if weighted_mask_loss is None
+            else float(weighted_mask_loss.detach().cpu())
+        ),
+        "case_names": list(batch.seq_name),
+        "queries_sha256": hashlib.sha256(
+            primary_output["flow"]["queries"]
+            .detach()
+            .cpu()
+            .contiguous()
+            .numpy()
+            .tobytes()
+        ).hexdigest(),
     }
     return primary_output
 
@@ -661,6 +702,7 @@ class Lite(LightningLite):
                 traj_per_sample=args.traj_per_sample,
                 random_frame_rate=args.random_frame_rate,
                 limit_samples=args.limit_samples,
+                load_target_masks=args.trackrad_mask_supervision_weight > 0.0,
             )
         else:
             from cotracker.datasets import real_dataset
@@ -898,9 +940,11 @@ class Lite(LightningLite):
                     teacher_info = output["teacher_sampling"]
                     if total_steps % args.teacher_log_every == 0:
                         logging.info(
-                            "experiment=%s step=%d primary=%s auxiliary=%s alpha=%.4f primary_loss=%.6f auxiliary_loss=%s",
+                            "experiment=%s step=%d case=%s query_sha256=%s primary=%s auxiliary=%s alpha=%.4f primary_loss=%.6f auxiliary_loss=%s mask_weight=%.4f mask_loss=%s",
                             args.experiment_name,
                             total_steps,
+                            ",".join(teacher_info["case_names"]),
+                            teacher_info["queries_sha256"],
                             teacher_models[teacher_info["primary_index"]][0],
                             (
                                 "none"
@@ -910,6 +954,8 @@ class Lite(LightningLite):
                             args.auxiliary_teacher_weight,
                             teacher_info["primary_loss_value"],
                             teacher_info["auxiliary_loss_value"],
+                            args.trackrad_mask_supervision_weight,
+                            teacher_info["mask_supervision_loss_value"],
                         )
                     logger.writer.add_scalar(
                         "teacher/primary_index",
@@ -1062,6 +1108,21 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="TrackRAD case directory containing */images/*_frames.mha",
+    )
+    parser.add_argument(
+        "--trackrad_mask_supervision_weight",
+        type=float,
+        default=0.0,
+        help=(
+            "weight for real per-frame TrackRAD mask-membership consistency; "
+            "zero preserves teacher-only training"
+        ),
+    )
+    parser.add_argument(
+        "--trackrad_mask_blur_radius",
+        type=int,
+        default=4,
+        help="pixel radius used to smooth masks for differentiable sampling",
     )
     parser.add_argument(
         "--skip_evaluation",
@@ -1349,6 +1410,20 @@ if __name__ == "__main__":
         )
     if args.confidence_loss_weight < 0:
         parser.error("--confidence_loss_weight must be non-negative")
+    if args.trackrad_mask_supervision_weight < 0:
+        parser.error("--trackrad_mask_supervision_weight must be non-negative")
+    if args.trackrad_mask_blur_radius < 0:
+        parser.error("--trackrad_mask_blur_radius must be non-negative")
+    if args.trackrad_mask_supervision_weight > 0 and not args.trackrad_data_dir:
+        parser.error("TrackRAD mask supervision requires --trackrad_data_dir")
+    if (
+        args.trackrad_mask_supervision_weight > 0
+        and args.auxiliary_teacher_weight > 0
+    ):
+        parser.error(
+            "TrackRAD mask supervision is an isolated single-teacher study and "
+            "requires --auxiliary_teacher_weight 0"
+        )
     confidence_only_modes = int(args.confidence_head_only) + int(
         args.confidence_updateformer
     )

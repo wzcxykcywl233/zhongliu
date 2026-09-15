@@ -26,6 +26,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 The generated files are `dataset-summary.json`, `dataset-cases.csv`,
 `dataset-mha-files.csv`, and `dataset-issues.csv`.
 
+## Run real-mask-assisted CoTracker training
+
+The ground-truth-mask study keeps the original one-random-teacher-per-batch
+training path and adds only a differentiable target-membership loss from the
+40-case training masks. It evaluates all weights on validation-10, freezes the
+selected weight, and evaluates only that candidate plus its paired control on
+test-38. Training and case evaluation both resume after interruption.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\run_ground_truth_mask_supervision_resumable.ps1
+```
+
+The design and result locations are documented in
+`cotracker-algorithm/experiments/GROUND_TRUTH_MASK_SUPERVISION.zh-CN.md`.
+
 ### Download and evaluate the 38-case public test set
 
 The public test release consists of the 8-case preliminary set and the 30-case
