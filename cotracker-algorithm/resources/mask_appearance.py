@@ -92,12 +92,17 @@ def refine_masks_by_appearance(
         raise ValueError("appearance gain and displacement penalty must be non-negative")
 
     feature_height, feature_width = frame_features.shape[-2:]
+    # Inference keeps the writable output masks on CPU while CoTracker's frozen
+    # feature maps normally remain on CUDA.  All appearance-score operands must
+    # share the feature device; ``corrected`` below deliberately stays on the
+    # original mask device for the existing output pipeline.
+    feature_device = frame_features.device
     masks_low = F.adaptive_max_pool2d(
         masks.float(), (feature_height, feature_width)
-    ).bool()
+    ).to(device=feature_device, dtype=torch.bool)
     query_low = F.adaptive_max_pool2d(
         query_mask.float(), (feature_height, feature_width)
-    ).bool()
+    ).to(device=feature_device, dtype=torch.bool)
     query_prototype = _masked_prototype(frame_features[0, 0], query_low[0, 0])
     if query_prototype is None:
         raise ValueError("query mask is empty at CoTracker feature resolution")

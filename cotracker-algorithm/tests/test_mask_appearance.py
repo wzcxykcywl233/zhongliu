@@ -66,6 +66,25 @@ class MaskAppearanceTests(unittest.TestCase):
         self.assertTrue(torch.equal(refined, masks))
         self.assertEqual(diagnostics["mask_appearance_corrected_frames"], 0)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_cpu_masks_with_cuda_features_keep_cpu_output(self) -> None:
+        masks = torch.zeros((1, 2, 12, 12), dtype=torch.bool)
+        masks[:, :, 4:8, 4:8] = True
+        features = torch.ones(
+            (1, 2, 2, 3, 3), dtype=torch.float32, device="cuda"
+        )
+
+        refined = mask_appearance.refine_masks_by_appearance(
+            masks,
+            masks[:, :1],
+            features,
+            radius_pixels=4,
+            feature_stride=4,
+        )
+
+        self.assertEqual(refined.device.type, "cpu")
+        self.assertTrue(torch.equal(refined, masks))
+
 
 if __name__ == "__main__":
     unittest.main()
