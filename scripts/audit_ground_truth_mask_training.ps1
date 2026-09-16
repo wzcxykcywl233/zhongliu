@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$TrainingRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask\train",
-    [int]$ExpectedSteps = 1000
+    [int]$ExpectedSteps = 1000,
+    [ValidateRange(0.5, 1.0)][double]$MinimumLogCoverage = 0.95
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +15,7 @@ $ExpectedWeights = @{
 }
 $Maps = @{}
 $Rows = @()
+$ReferenceConfig = $null
 
 function ConvertTo-WrappedLiteralPattern([string]$Text) {
     return (($Text.ToCharArray() | ForEach-Object {
@@ -49,8 +51,41 @@ function Get-RecordValue(
 foreach ($Profile in $Profiles) {
     $Log = Join-Path $TrainingRoot "$Profile\training.log"
     $Checkpoint = Join-Path $TrainingRoot "$Profile\cotracker_three_final.pth"
+    $ConfigPath = Join-Path $TrainingRoot "$Profile\run-config.json"
     if (-not (Test-Path -LiteralPath $Checkpoint -PathType Leaf)) {
         throw "$Profile is missing its final checkpoint"
+    }
+    if ((Get-Item -LiteralPath $Checkpoint).Length -le 0) {
+        throw "$Profile has an empty final checkpoint"
+    }
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        throw "$Profile is missing run-config.json"
+    }
+    $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    if (
+        $Config.profile -ne $Profile -or
+        [double]$Config.mask_supervision_weight -ne
+            [double]$ExpectedWeights[$Profile] -or
+        [int]$Config.num_steps -ne $ExpectedSteps -or
+        [double]$Config.auxiliary_teacher_weight -ne 0.0 -or
+        $Config.confidence_target_mode -ne "hard"
+    ) {
+        throw "$Profile has an incompatible run-config.json"
+    }
+    $ComparableConfig = [ordered]@{
+        num_steps = [int]$Config.num_steps
+        training_seed = [int]$Config.training_seed
+        teacher_seed = [int]$Config.teacher_seed
+        teacher_types = @($Config.teacher_types) -join ","
+        auxiliary_teacher_weight = [double]$Config.auxiliary_teacher_weight
+        confidence_target_mode = [string]$Config.confidence_target_mode
+        train_dataset = [string]$Config.train_dataset
+    } | ConvertTo-Json -Compress
+    if ($null -eq $ReferenceConfig) {
+        $ReferenceConfig = $ComparableConfig
+    }
+    elseif ($ComparableConfig -ne $ReferenceConfig) {
+        throw "$Profile differs from control in a frozen training variable"
     }
     $Map = @{}
     # Windows PowerShell can hard-wrap native Docker stderr in the middle of
@@ -105,11 +140,12 @@ foreach ($Profile in $Profiles) {
         }
     }
     $Missing = @(0..($ExpectedSteps - 1) | Where-Object { -not $Map.ContainsKey($_) })
-    if ($Missing.Count -gt 0) {
+    $Coverage = $Map.Count / [double]$ExpectedSteps
+    if ($Coverage -lt $MinimumLogCoverage) {
         $Preview = ($Missing | Select-Object -First 30) -join ","
-        throw "$Profile is missing $($Missing.Count) audited steps: $Preview"
+        throw "$Profile log coverage is $([math]::Round($Coverage, 4)); missing: $Preview"
     }
-    foreach ($Step in 0..($ExpectedSteps - 1)) {
+    foreach ($Step in @($Map.Keys)) {
         $Record = $Map[$Step]
         if ($Record.auxiliary -ne "none" -or $Record.alpha -ne "0.0000") {
             throw "$Profile used an auxiliary teacher at step $Step"
@@ -117,7 +153,12 @@ foreach ($Profile in $Profiles) {
         if ($Record.weight -ne $ExpectedWeights[$Profile]) {
             throw "$Profile reported mask weight $($Record.weight) at step $Step"
         }
-        if ($Profile -ne "control") {
+        if ($Profile -eq "control") {
+            if ($Record.mask_loss -ne "None") {
+                throw "Control unexpectedly used mask supervision at step $Step"
+            }
+        }
+        else {
             $ParsedLoss = 0.0
             if (-not [double]::TryParse(
                 $Record.mask_loss,
@@ -132,32 +173,47 @@ foreach ($Profile in $Profiles) {
     $Maps[$Profile] = $Map
     $Rows += [PSCustomObject]@{
         Profile = $Profile
-        Steps = $Map.Count
+        ExpectedSteps = $ExpectedSteps
+        AuditedSteps = $Map.Count
+        Coverage = $Coverage
+        MissingSteps = $Missing -join ","
         FinalCheckpointBytes = (Get-Item -LiteralPath $Checkpoint).Length
     }
 }
 
-$Control = $Maps["control"]
-foreach ($Profile in $Profiles | Where-Object { $_ -ne "control" }) {
-    foreach ($Step in 0..($ExpectedSteps - 1)) {
-        if ($Maps[$Profile][$Step].teacher -ne $Control[$Step].teacher) {
-            throw "Teacher mismatch at step ${Step}: control vs $Profile"
+$PairedSteps = 0
+$UnpairedSteps = @()
+$MinimumProfilesObserved = $Profiles.Count
+foreach ($Step in 0..($ExpectedSteps - 1)) {
+    $Available = @($Profiles | Where-Object { $Maps[$_].ContainsKey($Step) })
+    $MinimumProfilesObserved = [math]::Min(
+        $MinimumProfilesObserved,
+        $Available.Count
+    )
+    if ($Available.Count -lt 2) {
+        $UnpairedSteps += $Step
+        continue
+    }
+    $PairedSteps += 1
+    $ReferenceProfile = $Available[0]
+    $Reference = $Maps[$ReferenceProfile][$Step]
+    foreach ($Profile in $Available | Select-Object -Skip 1) {
+        $Record = $Maps[$Profile][$Step]
+        if ($Record.teacher -ne $Reference.teacher) {
+            throw "Teacher mismatch at step ${Step}: $ReferenceProfile vs $Profile"
         }
-        if ($Maps[$Profile][$Step].case -ne $Control[$Step].case) {
-            throw "Training-case mismatch at step ${Step}: control vs $Profile"
+        if ($Record.case -ne $Reference.case) {
+            throw "Training-case mismatch at step ${Step}: $ReferenceProfile vs $Profile"
         }
-        if ($Maps[$Profile][$Step].query_sha256 -ne $Control[$Step].query_sha256) {
-            throw "Query-sampling mismatch at step ${Step}: control vs $Profile"
-        }
-        if ($Maps[$Profile][$Step].mask_loss -eq "None") {
-            throw "$Profile did not report mask supervision at step $Step"
+        if ($Record.query_sha256 -ne $Reference.query_sha256) {
+            throw "Query-sampling mismatch at step ${Step}: $ReferenceProfile vs $Profile"
         }
     }
 }
-foreach ($Step in 0..($ExpectedSteps - 1)) {
-    if ($Control[$Step].mask_loss -ne "None") {
-        throw "Control unexpectedly used mask supervision at step $Step"
-    }
+$PairedCoverage = $PairedSteps / [double]$ExpectedSteps
+if ($PairedCoverage -lt $MinimumLogCoverage) {
+    $Preview = ($UnpairedSteps | Select-Object -First 30) -join ","
+    throw "Paired log coverage is $([math]::Round($PairedCoverage, 4)); unpaired: $Preview"
 }
 
 $Audit = [ordered]@{
@@ -165,6 +221,14 @@ $Audit = [ordered]@{
     passed = $true
     expected_steps = $ExpectedSteps
     profiles = $Profiles
+    final_checkpoints_verified = $true
+    frozen_run_configs_verified = $true
+    minimum_required_log_coverage = $MinimumLogCoverage
+    paired_steps = $PairedSteps
+    paired_coverage = $PairedCoverage
+    minimum_profiles_observed_at_any_step = $MinimumProfilesObserved
+    unpaired_steps = $UnpairedSteps
+    profile_coverage = $Rows
     teacher_sequence_mismatches = 0
     case_sequence_mismatches = 0
     query_sequence_mismatches = 0
