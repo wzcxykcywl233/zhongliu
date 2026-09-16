@@ -40,6 +40,8 @@ class GroundTruthMaskProtocolTests(unittest.TestCase):
         self.assertTrue(teacher["training_case_sequence_paired_across_profiles"])
         self.assertTrue(teacher["query_sequence_paired_across_profiles"])
         self.assertFalse(self.protocol["training"]["soft_labels"])
+        self.assertEqual(self.protocol["training"]["paired_step_seed"], 20260915)
+        self.assertIn("global-step", self.protocol["training"]["resume_protocol"])
 
 
 if __name__ == "__main__":

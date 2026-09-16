@@ -55,8 +55,27 @@ class TrackRADVideoDatasetTests(unittest.TestCase):
         dataset = object.__new__(trackrad_dataset.TrackRADVideoDataset)
         dataset.seq_len = 4
         dataset.random_frame_rate = False
+        dataset.sampling_seed = None
+        dataset.epoch = 0
         indices = dataset._sample_indices(2)
         self.assertTrue(torch.equal(indices, torch.tensor([0, 1, 1, 0])))
+
+    def test_seeded_clip_sampling_is_independent_of_global_rng(self):
+        dataset = object.__new__(trackrad_dataset.TrackRADVideoDataset)
+        dataset.seq_len = 10
+        dataset.random_frame_rate = True
+        dataset.sampling_seed = 20260916
+        dataset.epoch = 7
+
+        torch.manual_seed(1)
+        first = dataset._sample_indices(80, sample_index=3)
+        torch.manual_seed(99999)
+        second = dataset._sample_indices(80, sample_index=3)
+        self.assertTrue(torch.equal(first, second))
+
+        dataset.set_epoch(8)
+        third = dataset._sample_indices(80, sample_index=3)
+        self.assertFalse(torch.equal(first, third))
 
 
 if __name__ == "__main__":

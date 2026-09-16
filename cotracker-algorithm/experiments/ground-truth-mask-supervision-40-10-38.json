@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "study": "ground-truth-mask-membership-supervision",
   "protocol": {
     "training_cases": 40,
@@ -42,6 +42,8 @@
     "learning_rate": 0.00005,
     "confidence_labels": "hard",
     "soft_labels": false,
+    "paired_step_seed": 20260915,
+    "resume_protocol": "epoch/index-deterministic clip sampling plus global-step deterministic query/model randomness",
     "atomic_checkpoint_every_steps": 25
   },
   "selection": {

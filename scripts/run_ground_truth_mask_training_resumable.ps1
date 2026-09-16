@@ -2,7 +2,7 @@
 param(
     [string]$RepoRoot = "C:\zhongliu\zhongliu-tuning",
     [string]$TrainDataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_train_40",
-    [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask\train",
+    [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask-paired-v2\train",
     [int]$NumSteps = 1000,
     [int]$SaveEverySteps = 25,
     [ValidateRange(0, 16)][int]$DataLoaderWorkers = 0,
@@ -75,12 +75,13 @@ foreach ($Entry in $Profiles.GetEnumerator()) {
     }
 
     $Config = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         profile = $Profile
         mask_supervision_weight = $Weight
         mask_blur_radius_pixels = 4
         num_steps = $NumSteps
         training_seed = $TrainingSeed
+        paired_step_seed = $TrainingSeed
         teacher_seed = $TeacherSeed
         teacher_types = @(
             "cotracker2v1",
@@ -139,6 +140,7 @@ foreach ($Entry in $Profiles.GetEnumerator()) {
         "--teacher_offline_ckpt", "/checkpoints/baseline_offline.pth",
         "--auxiliary_teacher_weight", "0",
         "--seed", "$TrainingSeed",
+        "--paired_step_seed", "$TrainingSeed",
         "--teacher_seed", "$TeacherSeed",
         "--teacher_log_every", "1",
         "--confidence_target_mode", "hard",

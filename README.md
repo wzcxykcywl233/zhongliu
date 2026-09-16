@@ -32,7 +32,9 @@ The ground-truth-mask study keeps the original one-random-teacher-per-batch
 training path and adds only a differentiable target-membership loss from the
 40-case training masks. It evaluates all weights on validation-10, freezes the
 selected weight, and evaluates only that candidate plus its paired control on
-test-38. Training and case evaluation both resume after interruption.
+test-38. Its second protocol version derives clip and query randomness from the
+epoch, sample, and global step, so training and evaluation resume without
+changing the paired sequence after interruption.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `

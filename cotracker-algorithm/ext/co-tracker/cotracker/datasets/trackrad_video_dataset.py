@@ -29,6 +29,7 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         random_frame_rate: bool = False,
         limit_samples: int | None = None,
         load_target_masks: bool = False,
+        sampling_seed: int | None = None,
     ) -> None:
         self.root = Path(root)
         if not self.root.is_dir():
@@ -47,6 +48,22 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         self.traj_per_sample = traj_per_sample
         self.random_frame_rate = random_frame_rate
         self.load_target_masks = load_target_masks
+        self.sampling_seed = sampling_seed
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the deterministic clip-sampling epoch used for resumable runs."""
+
+        self.epoch = int(epoch)
+
+    def _sampling_generator(self, sample_index: int | None):
+        if self.sampling_seed is None or sample_index is None:
+            return None
+        generator = torch.Generator()
+        generator.manual_seed(
+            int(self.sampling_seed) + self.epoch * 1_000_003 + int(sample_index)
+        )
+        return generator
 
     @staticmethod
     def _robust_intensity_bounds(
@@ -84,17 +101,36 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
         video = ((video - lower) / max(upper - lower, 1e-6)).clamp(0, 1)
         return video.mul(255.0)
 
-    def _sample_indices(self, frame_count: int) -> torch.Tensor:
+    def _sample_indices(
+        self,
+        frame_count: int,
+        sample_index: int | None = None,
+    ) -> torch.Tensor:
+        generator = self._sampling_generator(sample_index)
         indices = torch.arange(frame_count)
         while indices.shape[0] < self.seq_len:
             indices = torch.cat([indices, indices.flip(0)], dim=0)
         max_rate = max(1, indices.shape[0] // self.seq_len)
         rate = 1
         if self.random_frame_rate and max_rate > 1:
-            rate = int(torch.randint(1, min(4, max_rate) + 1, ()).item())
+            rate = int(
+                torch.randint(
+                    1,
+                    min(4, max_rate) + 1,
+                    (),
+                    generator=generator,
+                ).item()
+            )
         required = self.seq_len * rate
         if indices.shape[0] > required:
-            start = int(torch.randint(0, indices.shape[0] - required + 1, ()).item())
+            start = int(
+                torch.randint(
+                    0,
+                    indices.shape[0] - required + 1,
+                    (),
+                    generator=generator,
+                ).item()
+            )
         else:
             start = 0
         return indices[start : start + required : rate][: self.seq_len]
@@ -116,7 +152,7 @@ class TrackRADVideoDataset(torch.utils.data.Dataset):
     def __getitem__(self, index: int):
         path = self.files[index]
         full_video = self._read_mha(path)
-        clip_indices = self._sample_indices(full_video.shape[0])
+        clip_indices = self._sample_indices(full_video.shape[0], index)
         video = full_video[clip_indices]
         video = F.interpolate(
             video[:, None],

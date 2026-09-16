@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$TrainingRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask\train",
+    [string]$TrainingRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask-paired-v2\train",
     [int]$ExpectedSteps = 1000,
     [ValidateRange(0.5, 1.0)][double]$MinimumLogCoverage = 0.95
 )
@@ -67,6 +67,7 @@ foreach ($Profile in $Profiles) {
         [double]$Config.mask_supervision_weight -ne
             [double]$ExpectedWeights[$Profile] -or
         [int]$Config.num_steps -ne $ExpectedSteps -or
+        [int]$Config.paired_step_seed -ne [int]$Config.training_seed -or
         [double]$Config.auxiliary_teacher_weight -ne 0.0 -or
         $Config.confidence_target_mode -ne "hard"
     ) {
@@ -75,6 +76,7 @@ foreach ($Profile in $Profiles) {
     $ComparableConfig = [ordered]@{
         num_steps = [int]$Config.num_steps
         training_seed = [int]$Config.training_seed
+        paired_step_seed = [int]$Config.paired_step_seed
         teacher_seed = [int]$Config.teacher_seed
         teacher_types = @($Config.teacher_types) -join ","
         auxiliary_teacher_weight = [double]$Config.auxiliary_teacher_weight

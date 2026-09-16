@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask",
+    [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\gt-mask-paired-v2",
     [ValidateSet("validation-10", "test-38")][string]$Split = "validation-10",
     [string[]]$Profiles = @("control", "mask_w0025", "mask_w005", "mask_w010"),
     [string]$InferenceProfile = "hierarchical_full_grid0_iterations2_memory_topk"

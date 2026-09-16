@@ -703,6 +703,7 @@ class Lite(LightningLite):
                 random_frame_rate=args.random_frame_rate,
                 limit_samples=args.limit_samples,
                 load_target_masks=args.trackrad_mask_supervision_weight > 0.0,
+                sampling_seed=args.paired_step_seed,
             )
         else:
             from cotracker.datasets import real_dataset
@@ -875,6 +876,8 @@ class Lite(LightningLite):
         while should_keep_training:
             epoch += 1
             g.manual_seed(args.seed + epoch)
+            if hasattr(train_dataset, "set_epoch"):
+                train_dataset.set_epoch(epoch)
             for i_batch, batch in enumerate(tqdm(train_loader)):
                 if epoch == resume_epoch and i_batch < resume_batch:
                     continue
@@ -887,6 +890,13 @@ class Lite(LightningLite):
                 optimizer.zero_grad()
 
                 assert model.training
+
+                if args.paired_step_seed is not None:
+                    step_seed = int(args.paired_step_seed) + int(total_steps)
+                    random.seed(step_seed)
+                    np.random.seed(step_seed % (2**32))
+                    torch.manual_seed(step_seed)
+                    torch.cuda.manual_seed_all(step_seed)
 
                 output = forward_batch(
                     batch,
@@ -1130,6 +1140,15 @@ if __name__ == "__main__":
         help="skip TapVid evaluation when only TrackRAD training data is mounted",
     )
     parser.add_argument("--seed", type=int, default=0, help="global training seed")
+    parser.add_argument(
+        "--paired_step_seed",
+        type=int,
+        default=None,
+        help=(
+            "derive every TrackRAD clip and per-step stochastic operation from "
+            "a fixed seed so interrupted profiles retain paired data/query sequences"
+        ),
+    )
     parser.add_argument(
         "--teacher_seed",
         type=int,
