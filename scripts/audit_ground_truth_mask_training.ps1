@@ -14,6 +14,41 @@ $ExpectedWeights = @{
 }
 $Maps = @{}
 $Rows = @()
+
+function ConvertTo-WrappedLiteralPattern([string]$Text) {
+    return (($Text.ToCharArray() | ForEach-Object {
+        [regex]::Escape([string]$_) + '\s*'
+    }) -join '')
+}
+
+$Keys = @{}
+foreach ($Name in @(
+    "experiment", "step", "case", "query_sha256", "primary",
+    "auxiliary", "alpha", "primary_loss", "auxiliary_loss",
+    "mask_weight", "mask_loss"
+)) {
+    $Keys[$Name] = ConvertTo-WrappedLiteralPattern $Name
+}
+$RecordPattern = (
+    '(?s)' +
+    $Keys.experiment + '=(?<experiment>.*?)' +
+    $Keys.step + '=(?<step>.*?)' +
+    $Keys.case + '=(?<case>.*?)' +
+    $Keys.query_sha256 + '=(?<query>.*?)' +
+    $Keys.primary + '=(?<primary>.*?)' +
+    $Keys.auxiliary + '=(?<auxiliary>.*?)' +
+    $Keys.alpha + '=(?<alpha>.*?)' +
+    $Keys.primary_loss + '=(?<primary_loss>.*?)' +
+    $Keys.auxiliary_loss + '=(?<auxiliary_loss>.*?)' +
+    $Keys.mask_weight + '=(?<weight>.*?)' +
+    $Keys.mask_loss +
+    '=\s*(?<mask_loss>None|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)'
+)
+
+function Get-CompactGroupValue($Match, [string]$Name) {
+    return [regex]::Replace($Match.Groups[$Name].Value, '\s+', '')
+}
+
 foreach ($Profile in $Profiles) {
     $Log = Join-Path $TrainingRoot "$Profile\training.log"
     $Checkpoint = Join-Path $TrainingRoot "$Profile\cotracker_three_final.pth"
@@ -21,17 +56,23 @@ foreach ($Profile in $Profiles) {
         throw "$Profile is missing its final checkpoint"
     }
     $Map = @{}
-    foreach ($Line in Get-Content -LiteralPath $Log) {
-        if ($Line -match 'step=(\d+) case=([^ ]+) query_sha256=([0-9a-f]{64}) primary=([A-Za-z0-9_]+) auxiliary=([^ ]+) alpha=([^ ]+).*mask_weight=([^ ]+) mask_loss=([^ ]+)') {
-            $Map[[int]$Matches[1]] = [ordered]@{
-                case = $Matches[2]
-                query_sha256 = $Matches[3]
-                teacher = $Matches[4]
-                auxiliary = $Matches[5]
-                alpha = $Matches[6]
-                weight = $Matches[7]
-                mask_loss = $Matches[8]
-            }
+    # Windows PowerShell can hard-wrap native Docker stderr in the middle of
+    # field names and values before Tee-Object receives it. Match every key with
+    # optional inter-character whitespace, then compact only captured values.
+    $RawLog = Get-Content -LiteralPath $Log -Raw
+    foreach ($Match in [regex]::Matches($RawLog, $RecordPattern)) {
+        if ((Get-CompactGroupValue $Match "experiment") -ne $Profile) {
+            continue
+        }
+        $Step = [int](Get-CompactGroupValue $Match "step")
+        $Map[$Step] = [ordered]@{
+            case = Get-CompactGroupValue $Match "case"
+            query_sha256 = Get-CompactGroupValue $Match "query"
+            teacher = Get-CompactGroupValue $Match "primary"
+            auxiliary = Get-CompactGroupValue $Match "auxiliary"
+            alpha = Get-CompactGroupValue $Match "alpha"
+            weight = Get-CompactGroupValue $Match "weight"
+            mask_loss = Get-CompactGroupValue $Match "mask_loss"
         }
     }
     $Missing = @(0..($ExpectedSteps - 1) | Where-Object { -not $Map.ContainsKey($_) })
