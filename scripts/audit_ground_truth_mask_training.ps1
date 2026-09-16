@@ -29,24 +29,21 @@ foreach ($Name in @(
 )) {
     $Keys[$Name] = ConvertTo-WrappedLiteralPattern $Name
 }
-$RecordPattern = (
-    '(?s)' +
-    $Keys.experiment + '=(?<experiment>.*?)' +
-    $Keys.step + '=(?<step>.*?)' +
-    $Keys.case + '=(?<case>.*?)' +
-    $Keys.query_sha256 + '=(?<query>.*?)' +
-    $Keys.primary + '=(?<primary>.*?)' +
-    $Keys.auxiliary + '=(?<auxiliary>.*?)' +
-    $Keys.alpha + '=(?<alpha>.*?)' +
-    $Keys.primary_loss + '=(?<primary_loss>.*?)' +
-    $Keys.auxiliary_loss + '=(?<auxiliary_loss>.*?)' +
-    $Keys.mask_weight + '=(?<weight>.*?)' +
-    $Keys.mask_loss +
-    '=\s*(?<mask_loss>None|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)'
-)
+function Get-CompactValue([string]$Value) {
+    return [regex]::Replace($Value, '\s+', '')
+}
 
-function Get-CompactGroupValue($Match, [string]$Name) {
-    return [regex]::Replace($Match.Groups[$Name].Value, '\s+', '')
+function Get-RecordValue(
+    [string]$Record,
+    [string]$StartPattern,
+    [string]$EndPattern
+) {
+    $Match = [regex]::Match(
+        $Record,
+        '(?s)' + $StartPattern + '=(?<value>.*?)' + $EndPattern + '='
+    )
+    if (-not $Match.Success) { return $null }
+    return Get-CompactValue $Match.Groups["value"].Value
 }
 
 foreach ($Profile in $Profiles) {
@@ -57,27 +54,60 @@ foreach ($Profile in $Profiles) {
     }
     $Map = @{}
     # Windows PowerShell can hard-wrap native Docker stderr in the middle of
-    # field names and values before Tee-Object receives it. Match every key with
-    # optional inter-character whitespace, then compact only captured values.
+    # field names and values before Tee-Object receives it. First isolate every
+    # experiment record so a malformed line cannot consume the next one. Then
+    # match each key with optional inter-character whitespace.
     $RawLog = Get-Content -LiteralPath $Log -Raw
-    foreach ($Match in [regex]::Matches($RawLog, $RecordPattern)) {
-        if ((Get-CompactGroupValue $Match "experiment") -ne $Profile) {
+    $RecordStarts = @([regex]::Matches($RawLog, $Keys.experiment + '='))
+    for ($RecordIndex = 0; $RecordIndex -lt $RecordStarts.Count; $RecordIndex++) {
+        $Start = $RecordStarts[$RecordIndex].Index
+        $End = if ($RecordIndex + 1 -lt $RecordStarts.Count) {
+            $RecordStarts[$RecordIndex + 1].Index
+        }
+        else {
+            $RawLog.Length
+        }
+        $RecordText = $RawLog.Substring($Start, $End - $Start)
+        $Experiment = Get-RecordValue $RecordText $Keys.experiment $Keys.step
+        if ($Experiment -ne $Profile) {
             continue
         }
-        $Step = [int](Get-CompactGroupValue $Match "step")
+        $StepText = Get-RecordValue $RecordText $Keys.step $Keys.case
+        $Case = Get-RecordValue $RecordText $Keys.case $Keys.query_sha256
+        $Query = Get-RecordValue $RecordText $Keys.query_sha256 $Keys.primary
+        $Primary = Get-RecordValue $RecordText $Keys.primary $Keys.auxiliary
+        $Auxiliary = Get-RecordValue $RecordText $Keys.auxiliary $Keys.alpha
+        $Alpha = Get-RecordValue $RecordText $Keys.alpha $Keys.primary_loss
+        $Weight = Get-RecordValue $RecordText $Keys.mask_weight $Keys.mask_loss
+        $MaskLossMatch = [regex]::Match(
+            $RecordText,
+            $Keys.mask_loss +
+            '=\s*(?<value>None|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)'
+        )
+        if (
+            $null -eq $StepText -or $null -eq $Case -or
+            $null -eq $Query -or $null -eq $Primary -or
+            $null -eq $Auxiliary -or $null -eq $Alpha -or
+            $null -eq $Weight -or -not $MaskLossMatch.Success -or
+            $StepText -notmatch '^\d+$' -or $Query -notmatch '^[0-9a-f]{64}$'
+        ) {
+            continue
+        }
+        $Step = [int]$StepText
         $Map[$Step] = [ordered]@{
-            case = Get-CompactGroupValue $Match "case"
-            query_sha256 = Get-CompactGroupValue $Match "query"
-            teacher = Get-CompactGroupValue $Match "primary"
-            auxiliary = Get-CompactGroupValue $Match "auxiliary"
-            alpha = Get-CompactGroupValue $Match "alpha"
-            weight = Get-CompactGroupValue $Match "weight"
-            mask_loss = Get-CompactGroupValue $Match "mask_loss"
+            case = $Case
+            query_sha256 = $Query
+            teacher = $Primary
+            auxiliary = $Auxiliary
+            alpha = $Alpha
+            weight = $Weight
+            mask_loss = Get-CompactValue $MaskLossMatch.Groups["value"].Value
         }
     }
     $Missing = @(0..($ExpectedSteps - 1) | Where-Object { -not $Map.ContainsKey($_) })
     if ($Missing.Count -gt 0) {
-        throw "$Profile is missing $($Missing.Count) audited steps"
+        $Preview = ($Missing | Select-Object -First 30) -join ","
+        throw "$Profile is missing $($Missing.Count) audited steps: $Preview"
     }
     foreach ($Step in 0..($ExpectedSteps - 1)) {
         $Record = $Map[$Step]
