@@ -1,7 +1,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Results,
-    [string]$Prefix = "dynamic-query-memory"
+    [string]$Prefix = "dynamic-query-memory",
+    [string]$ReferenceName = "hierarchical_full_grid0_iterations2",
+    [string[]]$Candidates = @(
+        "hierarchical_full_grid0_iterations2_memory_latest",
+        "hierarchical_full_grid0_iterations2_memory_topk",
+        "hierarchical_full_grid0_iterations2_memory_topk_diverse"
+    )
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,14 +30,8 @@ $Rows = foreach ($Property in $Summary.PSObject.Properties) {
     }
 }
 
-$ReferenceName = "hierarchical_full_grid0_iterations2"
 $Reference = $Rows | Where-Object Profile -eq $ReferenceName | Select-Object -First 1
 if (-not $Reference) { throw "Missing direct control: $ReferenceName" }
-$Candidates = @(
-    "hierarchical_full_grid0_iterations2_memory_latest",
-    "hierarchical_full_grid0_iterations2_memory_topk",
-    "hierarchical_full_grid0_iterations2_memory_topk_diverse"
-)
 $Deltas = foreach ($Name in $Candidates) {
     $Row = $Rows | Where-Object Profile -eq $Name | Select-Object -First 1
     if (-not $Row) { throw "Missing query-memory result: $Name" }

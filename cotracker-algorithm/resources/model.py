@@ -1,6 +1,7 @@
 from datetime import datetime
 import logging
 import os
+from time import perf_counter
 from pathlib import Path
 from typing import NamedTuple
 
@@ -10,9 +11,9 @@ from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOff
 from tuning import interpolate_keyframes
 
 try:
-    from .query_memory import DynamicQueryMemoryBank
+    from .query_memory import DynamicQueryMemoryBank, contour_motion_guard
 except ImportError:  # pragma: no cover - standalone test/module loading
-    from query_memory import DynamicQueryMemoryBank
+    from query_memory import DynamicQueryMemoryBank, contour_motion_guard
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ def _run_single_clip(
         "is_train": False,
     }
     if query_feature_memory is not None:
-        model_kwargs["query_feature_memory"] = (
+        model_kwargs["query_feature_memory"] = query_feature_memory if callable(query_feature_memory) else (
             query_feature_memory.track,
             query_feature_memory.support,
         )
@@ -583,6 +584,7 @@ def hierarchical_forward_pass(
     query_memory_min_similarity: float = 0.5,
     query_memory_original_floor: float = 0.3,
     query_memory_diversity_weight: float = 0.25,
+    query_memory_refinement: str = "none",
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
     return_mask_appearance_context: bool = False,
@@ -688,6 +690,7 @@ def hierarchical_forward_pass(
             original_floor=query_memory_original_floor,
             diversity_weight=query_memory_diversity_weight,
             diagnostics=diagnostics,
+            refinement=query_memory_refinement,
         )
         if diagnostics is not None:
             diagnostics["query_memory_enabled"] = 1
@@ -704,6 +707,13 @@ def hierarchical_forward_pass(
                 "query_memory_slots_used_max",
                 "query_memory_bank_size_max",
                 "query_memory_original_weight_sum",
+                "memory_point_candidates", "memory_point_rejected", "memory_point_accepted",
+                "memory_point_fusion_reads", "memory_original_only_points", "memory_weight_changed_points",
+                "memory_retrieval_point_reads", "memory_retrieval_fallback_points",
+                "memory_cycle_runs", "memory_cycle_checked_points", "memory_cycle_rejected_points",
+                "memory_cycle_error_sum", "memory_cycle_seconds",
+                "memory_contour_checked_points", "memory_contour_corrected_points",
+                "memory_contour_correction_sum", "memory_recent_slot_prunes",
             ):
                 diagnostics[key] = 0
 
@@ -717,9 +727,14 @@ def hierarchical_forward_pass(
         )
         history_memory = (
             query_memory.fused_memory()
-            if query_memory is not None
+            if query_memory is not None and query_memory_refinement != "current_retrieval"
             else original_memory
         )
+        if query_memory is not None and query_memory_refinement == "current_retrieval" and query_memory.entries:
+            point_reliability = visibility[:, level_start] * confidence[:, level_start]
+            if level_start == 0:
+                point_reliability = torch.ones_like(point_reliability)
+            history_memory = lambda feature: query_memory.fused_memory(feature, point_reliability)
         capture_memory = (
             (original_feature_weight > 0 or validation_enabled)
             and original_memory is None
@@ -861,9 +876,14 @@ def hierarchical_forward_pass(
     def commit_query_memory(level_start, result, captured):
         if query_memory is None or captured is None:
             return
+        if query_memory_refinement == "cycle_write" and level_start in query_memory.frame_indices:
+            _diagnostic_add(diagnostics, "query_memory_duplicate_frames", 1)
+            return
         if level_start == 0:
             reliability = 1.0
+            point_reliability = torch.ones_like(result.visibility[:, 0])
         elif bool(covered[level_start].item()):
+            point_reliability = visibility[:, level_start] * confidence[:, level_start]
             reliability = float(
                 (
                     visibility[:, level_start]
@@ -871,10 +891,35 @@ def hierarchical_forward_pass(
                 ).mean().item()
             )
         else:
+            point_reliability = result.visibility[:, 0] * result.confidence[:, 0]
             reliability = float(
                 (result.visibility[:, 0] * result.confidence[:, 0]).mean().item()
             )
-        accepted = query_memory.add(level_start, captured, reliability)
+        cycle_valid = None
+        if query_memory_refinement == "cycle_write" and level_start > 0:
+            cycle_start = max(0, level_start - span)
+            if not bool(covered[cycle_start : level_start + 1].all()):
+                raise RuntimeError("cycle check requires committed forward trajectory")
+            reverse_queries = torch.cat([
+                torch.zeros_like(queries[..., :1]), trajectories[:, level_start]
+            ], dim=-1)
+            if video.is_cuda:
+                torch.cuda.synchronize(video.device)
+            cycle_started = perf_counter()
+            reverse, _, _ = _run_single_clip(
+                model, video[:, cycle_start : level_start + 1].flip(1), reverse_queries,
+                support_grid_size=support_grid_size, n_iterations=n_iterations, device=device,
+            )
+            error = torch.linalg.vector_norm(reverse.trajectories[:, -1] - trajectories[:, cycle_start], dim=-1)
+            cycle_valid = error <= 2.0
+            if video.is_cuda:
+                torch.cuda.synchronize(video.device)
+            _diagnostic_add(diagnostics, "memory_cycle_seconds", perf_counter() - cycle_started)
+            _diagnostic_add(diagnostics, "memory_cycle_runs", 1)
+            _diagnostic_add(diagnostics, "memory_cycle_checked_points", error.numel())
+            _diagnostic_add(diagnostics, "memory_cycle_rejected_points", int((~cycle_valid).sum().item()))
+            _diagnostic_add(diagnostics, "memory_cycle_error_sum", float(error.sum().item()))
+        accepted = query_memory.add(level_start, captured, reliability, point_reliability, cycle_valid)
         logger.info(
             "Query memory anchor frame=%d reliability=%.4f accepted=%s bank=%s",
             level_start,
@@ -950,6 +995,8 @@ def hierarchical_forward_pass(
     if not bool(covered.all().item()):
         raise RuntimeError("hierarchical tracker did not cover every frame")
 
+    if query_memory_refinement == "contour_guard":
+        trajectories = contour_motion_guard(trajectories, visibility * confidence, diagnostics)
     hierarchical = TrackingResult(trajectories, visibility, confidence)
     if return_mask_appearance_context:
         if global_frame_features is None:

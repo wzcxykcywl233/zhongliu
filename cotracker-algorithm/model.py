@@ -155,6 +155,7 @@ def run_algorithm(
                 feature_similarity_threshold=config.feature_similarity_threshold,
                 feature_revalidate_radius=config.feature_revalidate_radius,
                 query_memory_mode=config.query_memory_mode,
+                query_memory_refinement=config.query_memory_refinement,
                 query_memory_slots=config.query_memory_slots,
                 query_memory_min_reliability=(
                     config.query_memory_min_reliability

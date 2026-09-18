@@ -8,7 +8,7 @@ settings that were supported by the completed single-point ablation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 
 
@@ -42,11 +42,19 @@ class ExperimentConfig:
     query_memory_min_similarity: float = 0.5
     query_memory_original_floor: float = 0.3
     query_memory_diversity_weight: float = 0.25
+    query_memory_refinement: str = "none"
     mask_appearance_radius: int = 0
     mask_appearance_min_gain: float = 0.01
     mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.query_memory_refinement not in {"none", "pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot"}:
+            raise ValueError("unsupported memory refinement")
+        if self.query_memory_refinement != "none" and (
+            self.query_memory_mode != "topk_confidence_diversity"
+            or self.support_grid_size != 0 or self.query_memory_slots != 4
+        ):
+            raise ValueError("memory refinement requires diverse four-slot memory and grid0")
         if self.border_points < 3:
             raise ValueError("border_points must be at least 3")
         if self.support_grid_size < 0:
@@ -373,11 +381,23 @@ AUDIT_EXPERIMENTS: dict[str, ExperimentConfig] = {
     "baseline_repeat": BASELINE,
 }
 
+MEMORY_REFINEMENT_EXPERIMENTS = {
+    "memory_control": HIERARCHICAL_EXPERIMENTS["hierarchical_full_grid0_iterations2_memory_topk_diverse"],
+    **{
+        "memory_" + refinement: replace(
+            HIERARCHICAL_EXPERIMENTS["hierarchical_full_grid0_iterations2_memory_topk_diverse"],
+            query_memory_refinement=refinement,
+        )
+        for refinement in ("pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot")
+    },
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
     **HIERARCHICAL_EXPERIMENTS,
     **AUDIT_EXPERIMENTS,
+    **MEMORY_REFINEMENT_EXPERIMENTS,
 }
 
 

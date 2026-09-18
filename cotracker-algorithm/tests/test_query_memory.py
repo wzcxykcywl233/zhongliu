@@ -27,6 +27,75 @@ def make_memory(x: float, y: float) -> Memory:
 
 
 class DynamicQueryMemoryTests(unittest.TestCase):
+    def test_pointwise_admission_keeps_good_point_despite_low_mean(self):
+        bank = query_memory.DynamicQueryMemoryBank("topk_confidence_diversity", 4, refinement="pointwise_write")
+        feature = torch.tensor([[[1., 0.], [1., 0.]]])
+        original = Memory((feature,), (feature[:, None].expand(-1, 49, -1, -1),))
+        changed = torch.tensor([[[0.6, 0.8], [0., 1.]]])
+        new = Memory((changed,), (changed[:, None].expand(-1, 49, -1, -1),))
+        bank.add(0, original, 1.)
+        self.assertTrue(bank.add(10, new, 0.45, torch.tensor([[0.9, 0.]])))
+        result = bank.fused_memory()
+        self.assertGreater(float(result.track[0][0, 0, 1]), 0)
+        torch.testing.assert_close(result.track[0][0, 1], original.track[0][0, 1])
+        torch.testing.assert_close(result.support[0][0, :, 1], original.support[0][0, :, 1])
+
+    def test_pointwise_fusion_changes_weights_without_changing_admission(self):
+        banks = [query_memory.DynamicQueryMemoryBank("topk_confidence_diversity", 4,
+                 min_similarity=-1, refinement=refinement) for refinement in ("none", "pointwise_fusion")]
+        def memory(features):
+            f = torch.tensor([features], dtype=torch.float32)
+            return Memory((f,), (f[:, None],))
+        for bank in banks:
+            bank.add(0, memory([[1, 0], [1, 0]]), 1)
+            bank.add(10, memory([[0.8, 0.6], [0.8, 0.6]]), 0.7, torch.tensor([[1., .4]]))
+            bank.add(20, memory([[0.8, -0.6], [0.8, -0.6]]), 0.7, torch.tensor([[.4, 1.]]))
+        self.assertEqual(banks[0].frame_indices, banks[1].frame_indices)
+        result = banks[1].fused_memory().track[0]
+        self.assertGreater(result[0, 0, 1], 0)
+        self.assertLess(result[0, 1, 1], 0)
+        self.assertFalse(torch.allclose(result, banks[0].fused_memory().track[0]))
+
+    def test_retrieval_uses_current_feature_and_falls_back_for_low_reliability(self):
+        bank = query_memory.DynamicQueryMemoryBank("topk_confidence_diversity", 4, refinement="current_retrieval", min_similarity=-1)
+        bank.add(0, make_memory(1, 0), 1)
+        bank.add(10, make_memory(.8, .6), 1)
+        bank.add(20, make_memory(.8, -.6), 1)
+        positive = bank.fused_memory(torch.tensor([[[.8, .6]]]), torch.ones(1, 1)).track[0]
+        negative = bank.fused_memory(torch.tensor([[[.8, -.6]]]), torch.ones(1, 1)).track[0]
+        fallback = bank.fused_memory(torch.tensor([[[.8, .6]]]), torch.zeros(1, 1)).track[0]
+        self.assertGreater(positive[0, 0, 1], 0)
+        self.assertLess(negative[0, 0, 1], 0)
+        self.assertAlmostEqual(float(fallback[0, 0, 1]), 0, places=6)
+
+    def test_cycle_rejection_preserves_original_feature(self):
+        bank = query_memory.DynamicQueryMemoryBank("topk_confidence_diversity", 4, refinement="cycle_write")
+        bank.add(0, make_memory(1, 0), 1)
+        self.assertFalse(bank.add(10, make_memory(.8, .6), 1, cycle_valid=torch.zeros(1, 1, dtype=torch.bool)))
+        self.assertEqual(bank.frame_indices, (0,))
+
+    def test_recent_slot_retains_lower_quality_latest_anchor(self):
+        bank = query_memory.DynamicQueryMemoryBank("topk_confidence_diversity", 4, refinement="recent_slot")
+        bank.add(0, make_memory(1, 0), 1)
+        for i in range(1, 5):
+            bank.add(i, make_memory(1, 0), 1 if i < 4 else .5)
+        self.assertEqual(len(bank.entries), 4)
+        self.assertIn(0, bank.frame_indices)
+        self.assertIn(4, bank.frame_indices)
+
+    def test_contour_guard_only_repairs_isolated_low_confidence_point(self):
+        tracks = torch.zeros(1, 3, 8, 2)
+        tracks[:, 1:] = 1
+        tracks[0, 1, 3, 0] = 9
+        reliability = torch.ones(1, 3, 8)
+        reliability[0, 1, 3] = .2
+        diagnostics = {}
+        result = query_memory.contour_motion_guard(tracks, reliability, diagnostics)
+        self.assertEqual(float(result[0, 1, 3, 0]), 7.)
+        self.assertEqual(diagnostics["memory_contour_corrected_points"], 1)
+        torch.testing.assert_close(result[:, 0], tracks[:, 0])
+        torch.testing.assert_close(result[:, 2], tracks[:, 2])
+
     def test_latest_preserves_original_and_newest_reliable_anchor(self) -> None:
         diagnostics = {}
         bank = query_memory.DynamicQueryMemoryBank(

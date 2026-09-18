@@ -122,7 +122,8 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
 
         extracted_track_features = []
         extracted_support_features = []
-        if query_feature_memory is not None:
+        memory_resolver = query_feature_memory if callable(query_feature_memory) else None
+        if query_feature_memory is not None and memory_resolver is None:
             if len(query_feature_memory) != 2:
                 raise ValueError("query_feature_memory must contain track and support pyramids")
             if not 0.0 <= query_feature_weight <= 1.0:
@@ -142,6 +143,13 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             )
             extracted_track_features.append(track_feat.detach())
             extracted_support_features.append(track_feat_support.detach())
+            if i == 0 and memory_resolver is not None:
+                # Reuse current level's query features; no extra encoder pass.
+                query_feature_memory = memory_resolver(track_feat.detach())
+                if len(query_feature_memory[0]) != self.corr_levels or len(query_feature_memory[1]) != self.corr_levels:
+                    raise ValueError("retrieved feature pyramid has wrong number of levels")
+                if not 0.0 <= query_feature_weight <= 1.0:
+                    raise ValueError("query_feature_weight must be in [0, 1]")
             if query_feature_memory is not None and query_feature_weight > 0:
                 original_track_feat = query_feature_memory[0][i].to(
                     device=track_feat.device,

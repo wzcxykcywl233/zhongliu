@@ -64,6 +64,8 @@ class HierarchicalFakeCoTracker:
         )
         batch, frames = video.shape[:2]
         points = queries.shape[1]
+        if callable(query_feature_memory):
+            query_feature_memory(torch.ones((batch, 1, points, 4), dtype=video.dtype))
         offsets = torch.arange(frames, dtype=video.dtype).view(1, frames, 1, 1)
         coordinates = queries[:, None, :, 1:3] + offsets
         visibility = torch.ones((batch, frames, points), dtype=video.dtype)
@@ -86,6 +88,29 @@ class HierarchicalFakeCoTracker:
 
 
 class ForwardPassTests(unittest.TestCase):
+    def test_refinements_cover_all_frames_and_report_mechanisms(self):
+        for refinement in ("pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot"):
+            with self.subTest(refinement=refinement):
+                diagnostics = {}
+                result = resource_model.hierarchical_forward_pass(
+                    HierarchicalFakeCoTracker(), torch.zeros(1, 12, 1, 16, 16),
+                    torch.zeros(1, 6, 3), span=2, support_grid_size=0,
+                    n_iterations=2, original_feature_weight=0.5, dual_anchor_weight=0.5,
+                    query_memory_mode="topk_confidence_diversity", query_memory_slots=4,
+                    query_memory_refinement=refinement, diagnostics=diagnostics, device="cpu",
+                )
+                self.assertEqual(result.trajectories.shape, (1, 12, 6, 2))
+                self.assertTrue(torch.isfinite(result.trajectories).all())
+                self.assertGreater(diagnostics["query_memory_fusions"], 0)
+                if refinement == "cycle_write":
+                    self.assertGreater(diagnostics["memory_cycle_runs"], 0)
+                    # This fake moves forward even when time is reversed: reject it.
+                    self.assertGreater(diagnostics["memory_cycle_rejected_points"], 0)
+                if refinement == "current_retrieval":
+                    self.assertGreater(diagnostics["memory_retrieval_point_reads"], 0)
+                if refinement == "recent_slot":
+                    self.assertGreater(diagnostics["memory_recent_slot_prunes"], 0)
+
     def test_keyframe_mode_restores_full_shapes_and_query_anchor(self) -> None:
         video = torch.zeros((1, 6, 1, 8, 8))
         queries = torch.tensor([[[0.0, 10.0, 20.0]]])

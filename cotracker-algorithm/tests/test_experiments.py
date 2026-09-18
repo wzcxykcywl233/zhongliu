@@ -9,6 +9,7 @@ from experiments import (
     COMBINATION_EXPERIMENTS,
     EXPERIMENTS,
     HIERARCHICAL_EXPERIMENTS,
+    MEMORY_REFINEMENT_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -16,6 +17,17 @@ from experiments import (
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_memory_refinement_has_one_changed_field_and_frozen_queue(self):
+        reference = EXPERIMENTS["hierarchical_full_grid0_iterations2_memory_topk_diverse"]
+        self.assertEqual(EXPERIMENTS["memory_control"], reference)
+        for name, config in MEMORY_REFINEMENT_EXPERIMENTS.items():
+            changes = [f.name for f in fields(config) if getattr(config, f.name) != getattr(reference, f.name)]
+            self.assertEqual(changes, [] if name == "memory_control" else ["query_memory_refinement"])
+        manifest = json.loads((Path(__file__).resolve().parents[1] / "experiments" / "memory-refinement-40-10-38.json").read_text())
+        self.assertEqual(set(manifest["profiles"]), set(MEMORY_REFINEMENT_EXPERIMENTS))
+        self.assertEqual(len(manifest["profiles"]), 7)
+        self.assertFalse(manifest["training"])
+
     def test_baseline_matches_original_submission(self) -> None:
         self.assertEqual(BASELINE, ExperimentConfig())
         self.assertEqual(BASELINE.border_points, 1000)
@@ -60,6 +72,7 @@ class ExperimentTests(unittest.TestCase):
             set(SINGLE_POINT_EXPERIMENTS)
             | set(COMBINATION_EXPERIMENTS)
             | set(HIERARCHICAL_EXPERIMENTS)
+            | set(MEMORY_REFINEMENT_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -517,6 +530,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(
             excluded_names,
             {
+                *MEMORY_REFINEMENT_EXPERIMENTS,
                 "points_1500",
                 "hierarchical_full_grid0_mamba",
                 "hierarchical_full_grid0_mamba_replacement",

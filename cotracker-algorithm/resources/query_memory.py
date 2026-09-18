@@ -15,6 +15,8 @@ class QueryMemoryEntry(NamedTuple):
     reliability: float
     similarity_to_original: float
     quality: float
+    point_quality: torch.Tensor | None = None
+    valid: torch.Tensor | None = None
 
 
 def _add(
@@ -65,6 +67,7 @@ class DynamicQueryMemoryBank:
         original_floor: float = 0.3,
         diversity_weight: float = 0.25,
         diagnostics: dict[str, int | float] | None = None,
+        refinement: str = "none",
     ) -> None:
         if mode not in self.MODES:
             raise ValueError(f"unsupported query memory mode: {mode}")
@@ -88,6 +91,9 @@ class DynamicQueryMemoryBank:
         self.original_floor = original_floor
         self.diversity_weight = diversity_weight
         self.diagnostics = diagnostics
+        self.refinement = refinement
+        if refinement not in {"none", "pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot"}:
+            raise ValueError("unsupported memory refinement")
         self._entries: list[QueryMemoryEntry] = []
 
     @property
@@ -98,7 +104,9 @@ class DynamicQueryMemoryBank:
     def frame_indices(self) -> tuple[int, ...]:
         return tuple(entry.frame_index for entry in self._entries)
 
-    def add(self, frame_index: int, memory: Any, reliability: float) -> bool:
+    def add(self, frame_index: int, memory: Any, reliability: float,
+            point_reliability: torch.Tensor | None = None,
+            cycle_valid: torch.Tensor | None = None) -> bool:
         """Admit an anchor, preserving frame zero and enforcing the memory budget."""
         _add(self.diagnostics, "query_memory_write_candidates", 1)
         reliability = float(max(0.0, min(1.0, reliability)))
@@ -115,17 +123,59 @@ class DynamicQueryMemoryBank:
             return False
 
         similarity = memory_similarity(memory, self._entries[0].memory)
-        if reliability < self.min_reliability:
+        point_similarity = (_primary_feature(memory) * _primary_feature(self._entries[0].memory)).sum(-1)
+        if point_reliability is None:
+            point_reliability = torch.full_like(point_similarity, reliability)
+        point_reliability = point_reliability.to(point_similarity).clamp(0, 1)
+        if point_reliability.shape != point_similarity.shape:
+            raise ValueError("point reliability shape must match query points")
+        point_quality = 0.6 * point_reliability + 0.4 * ((point_similarity + 1) * 0.5).clamp(0, 1)
+        valid = None
+        if self.refinement == "pointwise_write":
+            valid = (point_reliability >= self.min_reliability) & (point_similarity >= self.min_similarity)
+            _add(self.diagnostics, "memory_point_candidates", valid.numel())
+            _add(self.diagnostics, "memory_point_rejected", int((~valid).sum().item()))
+            _add(self.diagnostics, "memory_point_accepted", int(valid.sum().item()))
+            if not bool(valid.any()):
+                return False
+        if self.refinement != "pointwise_write" and reliability < self.min_reliability:
             _add(self.diagnostics, "query_memory_writes_rejected_reliability", 1)
             return False
-        if similarity < self.min_similarity:
+        if self.refinement != "pointwise_write" and similarity < self.min_similarity:
             _add(self.diagnostics, "query_memory_writes_rejected_similarity", 1)
             return False
+
+        if cycle_valid is not None:
+            valid = cycle_valid.to(device=point_similarity.device, dtype=torch.bool)
+            if valid.shape != point_similarity.shape:
+                raise ValueError("cycle validity shape must match query points")
+            if not bool(valid.any()):
+                return False
+
+        if valid is not None:
+            # Reject feature values for diversity scoring too. Copy the latest
+            # valid value, but exclude this slot from this point's fusion.
+            def retained_pyramid(attribute):
+                values = []
+                for level, current in enumerate(getattr(memory, attribute)):
+                    previous = getattr(self._entries[0].memory, attribute)[level]
+                    for entry in self._entries[1:]:
+                        candidate = getattr(entry.memory, attribute)[level]
+                        if entry.valid is None:
+                            previous = candidate
+                        else:
+                            mask = entry.valid.reshape(current.shape[0], *([1] * (current.ndim - 3)), current.shape[-2], 1)
+                            previous = torch.where(mask, candidate, previous)
+                    mask = valid.reshape(current.shape[0], *([1] * (current.ndim - 3)), current.shape[-2], 1)
+                    values.append(torch.where(mask, current, previous))
+                return tuple(values)
+            memory = type(memory)(retained_pyramid("track"), retained_pyramid("support"))
 
         normalized_similarity = max(0.0, min(1.0, (similarity + 1.0) * 0.5))
         quality = 0.6 * reliability + 0.4 * normalized_similarity
         self._entries.append(
-            QueryMemoryEntry(frame_index, memory, reliability, similarity, quality)
+            QueryMemoryEntry(frame_index, memory, reliability, similarity, quality,
+                             point_quality, valid)
         )
         _add(self.diagnostics, "query_memory_writes_accepted", 1)
         self._prune()
@@ -142,7 +192,12 @@ class DynamicQueryMemoryBank:
 
         original = self._entries[0]
         candidates = self._entries[1:]
-        if self.mode == "latest":
+        if self.refinement == "recent_slot":
+            newest = max(candidates, key=lambda entry: entry.frame_index)
+            others = [e for e in candidates if e.frame_index != newest.frame_index]
+            selected = [newest] + self._select_diverse(others, self.capacity - 2, original, [newest])
+            _add(self.diagnostics, "memory_recent_slot_prunes", 1)
+        elif self.mode == "latest":
             selected = [max(candidates, key=lambda entry: entry.frame_index)]
         elif self.mode == "topk_confidence":
             selected = sorted(
@@ -163,10 +218,11 @@ class DynamicQueryMemoryBank:
         candidates: list[QueryMemoryEntry],
         count: int,
         original: QueryMemoryEntry,
+        extra_reference: list[QueryMemoryEntry] | None = None,
     ) -> list[QueryMemoryEntry]:
         remaining = list(candidates)
         selected: list[QueryMemoryEntry] = []
-        reference = [original]
+        reference = [original] + (extra_reference or [])
         while remaining and len(selected) < count:
             def score(entry: QueryMemoryEntry) -> tuple[float, int]:
                 max_similarity = max(
@@ -182,10 +238,11 @@ class DynamicQueryMemoryBank:
             chosen = max(remaining, key=score)
             selected.append(chosen)
             reference.append(chosen)
-            remaining.remove(chosen)
+            remaining = [entry for entry in remaining if entry.frame_index != chosen.frame_index]
         return selected
 
-    def fused_memory(self) -> Any | None:
+    def fused_memory(self, current_feature: torch.Tensor | None = None,
+                     current_reliability: torch.Tensor | None = None) -> Any | None:
         """Fuse retained anchors into one normalized pyramid for CoTracker."""
         if not self._entries:
             return None
@@ -207,7 +264,48 @@ class DynamicQueryMemoryBank:
                 (1.0 - original_weight) * quality / quality_sum
                 for quality in qualities
             ]
-        _add(self.diagnostics, "query_memory_original_weight_sum", weights[0])
+
+        point_weights = None
+        if len(self._entries) > 1 and self.refinement in {
+            "pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write"
+        }:
+            shape = _primary_feature(self._entries[0].memory).shape[:2]
+            template = _primary_feature(self._entries[0].memory)[..., 0]
+            qualities = []
+            for entry in self._entries[1:]:
+                q = (entry.point_quality if self.refinement == "pointwise_fusion"
+                     else torch.full_like(template, max(entry.quality, 1e-6)))
+                if entry.valid is not None:
+                    q = q * entry.valid.to(q)
+                qualities.append(q)
+            scores = torch.stack(qualities)
+            if self.refinement == "current_retrieval":
+                if current_feature is None or current_reliability is None:
+                    raise ValueError("retrieval requires current feature and reliability")
+                current = current_feature[:, 0] if current_feature.ndim == 4 else current_feature
+                current = torch.nn.functional.normalize(current.float(), dim=-1)
+                similarities = torch.stack([
+                    (current * _primary_feature(entry.memory)).sum(-1)
+                    for entry in self._entries[1:]
+                ])
+                reliable = current_reliability.to(template) >= self.min_reliability
+                scores = scores * torch.where(reliable[None], (similarities / 0.2).exp(), 1.0)
+                _add(self.diagnostics, "memory_retrieval_point_reads", int(reliable.sum().item()))
+                _add(self.diagnostics, "memory_retrieval_fallback_points", int((~reliable).sum().item()))
+            denominator = scores.sum(0)
+            has_history = denominator > 0
+            history_weights = (1 - self.original_floor) * scores / denominator.clamp_min(1e-12)
+            original_weights = torch.where(has_history, self.original_floor, 1.0)
+            point_weights = torch.cat([original_weights[None], history_weights], dim=0)
+            if point_weights.shape[1:] != shape:
+                raise ValueError("invalid point weight shape")
+            _add(self.diagnostics, "memory_point_fusion_reads", template.numel())
+            _add(self.diagnostics, "memory_original_only_points", int((~has_history).sum().item()))
+            shared = template.new_tensor(weights)[:, None, None]
+            _add(self.diagnostics, "memory_weight_changed_points", int(((point_weights - shared).abs().amax(0) > 1e-6).sum().item()))
+
+        _add(self.diagnostics, "query_memory_original_weight_sum",
+             float(point_weights[0].mean().item()) if point_weights is not None else weights[0])
 
         def fuse_pyramid(attribute: str) -> tuple[torch.Tensor, ...]:
             pyramids = [getattr(entry.memory, attribute) for entry in self._entries]
@@ -217,11 +315,37 @@ class DynamicQueryMemoryBank:
             for tensors in zip(*pyramids):
                 if len({tuple(tensor.shape) for tensor in tensors}) != 1:
                     raise ValueError("query memory tensors must have matching shapes")
-                mixed = sum(
-                    weight * tensor for weight, tensor in zip(weights, tensors)
-                )
+                if point_weights is None:
+                    mixed = sum(weight * tensor for weight, tensor in zip(weights, tensors))
+                else:
+                    # Both pyramids use B,...,N,C (support includes patch axes).
+                    mixed = sum(
+                        point_weights[k].reshape(
+                            tensor.shape[0], *([1] * (tensor.ndim - 3)), tensor.shape[-2], 1
+                        ).to(tensor) * tensor
+                        for k, tensor in enumerate(tensors)
+                    )
                 fused.append(torch.nn.functional.normalize(mixed, dim=-1))
             return tuple(fused)
 
         memory_type = type(self._entries[0].memory)
         return memory_type(fuse_pyramid("track"), fuse_pyramid("support"))
+
+
+def contour_motion_guard(trajectories, reliability, diagnostics=None):
+    """Weak, non-recursive repair of isolated low-reliability boundary motion."""
+    if trajectories.shape[-2] < 5 or trajectories.shape[1] < 2:
+        return trajectories
+    displacement = trajectories[:, 1:] - trajectories[:, :-1]
+    neighbors = torch.stack([torch.roll(displacement, shift, dims=-2) for shift in (-2, -1, 1, 2)])
+    ordered = neighbors.sort(dim=0).values
+    median = (ordered[1] + ordered[2]) * 0.5
+    error = torch.linalg.vector_norm(displacement - median, dim=-1)
+    selected = (reliability[:, 1:] < 0.5) & (error > 2.0)
+    correction = torch.where(selected[..., None], 0.25 * (median - displacement), 0.0)
+    result = trajectories.clone()
+    result[:, 1:] += correction
+    _add(diagnostics, "memory_contour_checked_points", selected.numel())
+    _add(diagnostics, "memory_contour_corrected_points", int(selected.sum().item()))
+    _add(diagnostics, "memory_contour_correction_sum", float(torch.linalg.vector_norm(correction, dim=-1).sum().item()))
+    return result

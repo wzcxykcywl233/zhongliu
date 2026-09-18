@@ -9,6 +9,7 @@ param(
         "hierarchical_full_d15"
     ),
     [switch]$RequireDiagnostics,
+    [switch]$FreezeImages,
     [string]$ModelCheckpoint = "",
     [string]$FusionGateCheckpoint = ""
 )
@@ -118,6 +119,26 @@ try {
     )
     if ($Status -ne 0) {
         throw "Evaluation image build failed with exit code $Status"
+    }
+
+    if ($FreezeImages) {
+        $ImageIdentity = [ordered]@{}
+        foreach ($Image in @('trackrad-algorithm-cotracker-algorithm', 'trackrad-evaluation')) {
+            $ImageId = & docker image inspect --format '{{.Id}}' $Image
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect image: $Image" }
+            $ImageIdentity[$Image] = [string]$ImageId
+        }
+        $IdentityPath = Join-Path $Results 'frozen-images.json'
+        if (Test-Path -LiteralPath $IdentityPath) {
+            $PreviousImages = Get-Content -LiteralPath $IdentityPath -Raw | ConvertFrom-Json
+            foreach ($Image in $ImageIdentity.Keys) {
+                if ($PreviousImages.$Image -ne $ImageIdentity[$Image]) {
+                    throw "Docker image changed since checkpoint: $Image. Use a new results directory."
+                }
+            }
+        } else {
+            Write-AtomicJson -Path $IdentityPath -Value $ImageIdentity
+        }
     }
 
     $Failures = New-Object System.Collections.Generic.List[string]
@@ -261,7 +282,7 @@ try {
                             throw "$Profile/$CaseId did not report an active long-fusion gate"
                         }
                     }
-                    if ($Profile -like "*_memory_*") {
+                    if ($Profile -like "*_memory_*" -or $Profile -like "memory_*") {
                         $MemoryFusions = $Diagnostic.mechanism.query_memory_fusions
                         $MemoryWrites = $Diagnostic.mechanism.query_memory_writes_accepted
                         if ($null -eq $MemoryFusions -or [int]$MemoryFusions -le 0) {

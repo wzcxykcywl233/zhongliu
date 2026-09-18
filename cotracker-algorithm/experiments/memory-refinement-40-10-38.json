@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "reference": "memory_control",
+  "reference_alias_of": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+  "training": false,
+  "splits": {"train": 40, "validation": 10, "test": 38},
+  "profiles": [
+    "memory_control",
+    "memory_pointwise_write",
+    "memory_pointwise_fusion",
+    "memory_current_retrieval",
+    "memory_recent_slot",
+    "memory_cycle_write",
+    "memory_contour_guard"
+  ],
+  "fixed_parameters": {
+    "span": 10,
+    "iterations": 2,
+    "support_grid_size": 0,
+    "slots": 4,
+    "original_feature_weight": 0.5,
+    "dual_anchor_weight": 0.5,
+    "original_memory_share": 0.3,
+    "point_min_reliability": 0.5,
+    "point_min_similarity": 0.5,
+    "retrieval_temperature": 0.2,
+    "cycle_threshold_model_pixels": 2.0,
+    "contour_threshold_model_pixels": 2.0,
+    "contour_neighbor_count": 4,
+    "contour_correction_weight": 0.25
+  },
+  "evaluation": "All profiles are fixed before validation; validation and test remain separate. No test-label adaptation.",
+  "resume": "Completed cases only; interrupted case is recomputed. Frozen source, checkpoint and dataset hashes must match."
+}

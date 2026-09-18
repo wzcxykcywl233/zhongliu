@@ -1,5 +1,12 @@
 # CoTracker3 for Tumor Tracking 
 
+### Six independent query-memory refinements
+
+Run `scripts/run_memory_refinement_resumable.ps1` for the diverse-memory control
+and six fixed inference-only ablations, on validation-10 then test-38.
+The queue freezes source/weight/data hashes and resumes completed cases after interruption.
+See [the protocol and commands](cotracker-algorithm/experiments/MEMORY_REFINEMENT.zh-CN.md).
+
 Run from the root of this repository:
 ```
 git submodule init
