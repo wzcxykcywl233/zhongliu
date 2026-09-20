@@ -185,6 +185,7 @@ def _run_single_clip(
     query_feature_weight: float = 0.0,
     return_query_feature_memory: bool = False,
     return_frame_features: bool = False,
+    feature_observer=None,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> tuple[TrackingResult, QueryFeatureMemory | None, torch.Tensor | None]:
     """
@@ -236,6 +237,8 @@ def _run_single_clip(
         model_kwargs["return_query_feature_memory"] = True
     if return_frame_features:
         model_kwargs["return_frame_features"] = True
+    if feature_observer is not None:
+        model_kwargs["feature_observer"] = feature_observer
     out = model(**model_kwargs)
 
     # Always use original_N to ensure consistent shapes with ground truth
@@ -585,6 +588,7 @@ def hierarchical_forward_pass(
     query_memory_original_floor: float = 0.3,
     query_memory_diversity_weight: float = 0.25,
     query_memory_refinement: str = "none",
+    chain_trace=None,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
     return_mask_appearance_context: bool = False,
@@ -719,6 +723,7 @@ def hierarchical_forward_pass(
 
     def run_level(level_start, level_end, level_queries):
         nonlocal original_memory
+        trace_key = chain_trace.begin_level(level_start, level_end, level_queries) if chain_trace is not None else None
         _diagnostic_add(diagnostics, "hierarchical_level_runs", 1)
         _diagnostic_add(
             diagnostics,
@@ -752,8 +757,11 @@ def hierarchical_forward_pass(
             query_feature_weight=original_feature_weight,
             return_query_feature_memory=return_memory,
             return_frame_features=validation_enabled,
+            feature_observer=(chain_trace.observer(trace_key) if chain_trace is not None else None),
             device=device,
         )
+        if chain_trace is not None:
+            chain_trace.tensor(trace_key + "/local_trajectory", result.trajectories)
         current_memory = captured
         if captured is not None and original_memory is None:
             original_memory = captured
@@ -763,6 +771,14 @@ def hierarchical_forward_pass(
                 global_result.visibility[:, level_start : level_end + 1],
                 global_result.confidence[:, level_start : level_end + 1],
             )
+            if chain_trace is not None:
+                local_score = (1.0 - dual_anchor_weight) * result.visibility * result.confidence
+                global_score = dual_anchor_weight * global_slice.visibility * global_slice.confidence
+                weight = torch.where(local_score + global_score > 1e-6,
+                                     local_score / (local_score + global_score).clamp_min(1e-6),
+                                     1.0 - dual_anchor_weight)
+                chain_trace.tensor(trace_key + "/local_fusion_weight", weight)
+                chain_trace.tensor(trace_key + "/global_trajectory", global_slice.trajectories)
             if validation_enabled:
                 if current_memory is None or original_memory is None:
                     raise RuntimeError("feature validation memory was not returned")
@@ -871,6 +887,8 @@ def hierarchical_forward_pass(
                 result = fuse_tracking_results(
                     result, global_slice, dual_anchor_weight
                 )
+        if chain_trace is not None:
+            chain_trace.tensor(trace_key + "/fused_trajectory", result.trajectories)
         return result, captured
 
     def commit_query_memory(level_start, result, captured):

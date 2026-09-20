@@ -52,6 +52,7 @@ class HierarchicalFakeCoTracker:
         query_feature_weight=0.0,
         return_query_feature_memory=False,
         return_frame_features=False,
+        feature_observer=None,
     ):
         del iters, is_train
         self.calls.append(
@@ -74,6 +75,8 @@ class HierarchicalFakeCoTracker:
         ):
             visibility[:, 1:] = 0.0
         confidence = torch.ones_like(visibility)
+        if feature_observer is not None:
+            feature_observer(0, "input_track", torch.ones(batch, 1, points, 4))
         result = (coordinates, visibility, confidence, None)
         extras = []
         if return_query_feature_memory:
@@ -88,6 +91,22 @@ class HierarchicalFakeCoTracker:
 
 
 class ForwardPassTests(unittest.TestCase):
+    def test_chain_trace_preserves_hierarchical_predictions(self):
+        from chain_diagnostics import ChainTrace
+        video, queries = torch.zeros(1, 12, 1, 16, 16), torch.zeros(1, 6, 3)
+        kwargs = dict(span=2, support_grid_size=0, n_iterations=2,
+                      original_feature_weight=.5, dual_anchor_weight=.5,
+                      query_memory_mode="topk_confidence_diversity", query_memory_slots=4,
+                      device="cpu")
+        plain = resource_model.hierarchical_forward_pass(HierarchicalFakeCoTracker(), video, queries, **kwargs)
+        trace = ChainTrace(2)
+        observed = resource_model.hierarchical_forward_pass(HierarchicalFakeCoTracker(), video, queries, chain_trace=trace, **kwargs)
+        torch.testing.assert_close(plain.trajectories, observed.trajectories, rtol=0, atol=0)
+        self.assertTrue(trace.levels)
+        for segment in trace.levels:
+            for field in ('local_trajectory', 'global_trajectory', 'fused_trajectory', 'local_fusion_weight'):
+                self.assertIn(segment['key'] + '/' + field, trace.data)
+
     def test_refinements_cover_all_frames_and_report_mechanisms(self):
         for refinement in ("pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot"):
             with self.subTest(refinement=refinement):

@@ -209,3 +209,12 @@ Use `-SkipInference`, `-SkipTeacherTraining`, or `-SkipTeacherEvaluation` to
 resume only a selected stage. The inference results are merged into
 `public-test-38-results`; hard-label teacher training and evaluation are stored
 under `protocol-40-10-38`.
+
+### Diagnose memory features, trajectories, and masks
+
+Run `scripts/run_memory_chain_diagnostics.ps1` for an observation-only paired
+38-case diagnostic queue (control, repeated control, pointwise fusion, current
+retrieval). It records sampled pyramid features, full trajectories and masks,
+checks repeatability and prior outputs, and resumes per case/profile using
+hashed checkpoints. It does not train or access later-frame ground-truth masks.
+See [the diagnostic design and remote commands](cotracker-algorithm/experiments/MEMORY_CHAIN_DIAGNOSTICS.zh-CN.md).

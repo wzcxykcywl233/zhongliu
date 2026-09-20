@@ -28,6 +28,7 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         query_feature_weight=0.0,
         return_query_feature_memory=False,
         return_frame_features=False,
+        feature_observer=None,
     ):
         """Predict tracks
 
@@ -163,6 +164,9 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
                     raise ValueError("track feature memory shape does not match current queries")
                 if original_support_feat.shape != track_feat_support.shape:
                     raise ValueError("support feature memory shape does not match current queries")
+                if feature_observer is not None:
+                    feature_observer(i, "memory_track", original_track_feat)
+                    feature_observer(i, "memory_support", original_support_feat)
                 track_feat = F.normalize(
                     query_feature_weight * original_track_feat
                     + (1.0 - query_feature_weight) * track_feat,
@@ -173,6 +177,11 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
                     + (1.0 - query_feature_weight) * track_feat_support,
                     dim=-1,
                 )
+            if feature_observer is not None:
+                feature_observer(i, "current_track", extracted_track_features[-1])
+                feature_observer(i, "current_support", extracted_support_features[-1])
+                feature_observer(i, "input_track", track_feat)
+                feature_observer(i, "input_support", track_feat_support)
             track_feat_pyramid.append(track_feat.repeat(1, T, 1, 1))
             track_feat_support_pyramid.append(track_feat_support.unsqueeze(1))
 

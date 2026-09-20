@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "resources"), str(ROOT / "ext" / "co-tracker")]
 from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOffline
 from query_memory import DynamicQueryMemoryBank
+from chain_diagnostics import ChainTrace
 from typing import NamedTuple
 
 class Memory(NamedTuple):
@@ -35,6 +36,13 @@ class RealFeatureIntegrationTests(unittest.TestCase):
                         resolved = resolver(memory.track[0])
                         direct = model(video, queries, iters=1, query_feature_memory=resolved, query_feature_weight=.5)
                         callback = model(video, queries, iters=1, query_feature_memory=resolver, query_feature_weight=.5)
+                        trace = ChainTrace(sample_points=2)
+                        observed = model(video, queries, iters=1, query_feature_memory=resolver,
+                                         query_feature_weight=.5, feature_observer=trace.observer('segment'))
+                        for a, b in zip(callback[:3], observed[:3]):
+                            torch.testing.assert_close(a, b, rtol=0, atol=0)
+                        self.assertEqual(trace.data['segment/feature/0/input_support'].shape[:2], (3, 2))
+                        self.assertIn('segment/feature/3/memory_track', trace.data)
                         for a, b in zip(direct[:3], callback[:3]):
                             self.assertTrue(torch.isfinite(b).all())
                             torch.testing.assert_close(a, b)

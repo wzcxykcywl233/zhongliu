@@ -32,6 +32,7 @@ def run_algorithm(
     frame_rate: float,
     magnetic_field_strength: float,
     scanned_region: str,
+    _chain_trace=None,
 ) -> np.ndarray:
     """
     Implement your algorithm here.
@@ -116,6 +117,8 @@ def run_algorithm(
             seg_mask=query,
             n_border_points=config.border_points,
         )
+        if _chain_trace is not None:
+            _chain_trace.tensor("initial_queries", queries)
         if numeric_diagnostics is not None:
             numeric_diagnostics["query_points"] = int(queries.shape[1])
             numeric_diagnostics["input_frames"] = int(T)
@@ -156,6 +159,7 @@ def run_algorithm(
                 feature_revalidate_radius=config.feature_revalidate_radius,
                 query_memory_mode=config.query_memory_mode,
                 query_memory_refinement=config.query_memory_refinement,
+                chain_trace=_chain_trace,
                 query_memory_slots=config.query_memory_slots,
                 query_memory_min_reliability=(
                     config.query_memory_min_reliability
@@ -254,6 +258,9 @@ def run_algorithm(
         # Every TrackRAD query is made at t=0. Preserve the exact annotation
         # after optional temporal filtering.
         trajectories[:, 0] = queries[:, :, 1:3].to(trajectories.device)
+        if _chain_trace is not None:
+            _chain_trace.tensor("final_trajectory", trajectories)
+            _chain_trace.tensor("integer_contour", trajectories.to(torch.int32))
 
         validity = build_validity_mask(
             tracking.visibility,
@@ -313,6 +320,8 @@ def run_algorithm(
                     numeric_diagnostics["mask_appearance_frames"],
                 )
         logger.info("after TAP->SEG conversion:")
+        if _chain_trace is not None:
+            _chain_trace.mask("model_mask", prediction)
         logger.info(f"\tprediction.shape={prediction.shape}")
 
         # convert back to original shape
@@ -334,6 +343,8 @@ def run_algorithm(
 
         # bring into output np format
         prediction = prediction.cpu().numpy().transpose(2, 1, 0)  # W, H, T
+        if _chain_trace is not None:
+            _chain_trace.mask("native_mask", prediction.transpose(2, 1, 0)[None])
 
         if diagnostics is not None and numeric_diagnostics is not None:
             diagnostics["prediction"] = {
