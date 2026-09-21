@@ -227,3 +227,14 @@ query-frame-only V+C. It uses original weights, no training, the existing
 40/10/38 protocol, case-level resume, frozen inputs and mechanism audits.
 Use the `test-38` CSV for performance reporting, not the validation CSV.
 See [design, risks and remote commands](cotracker-algorithm/experiments/QUERY_STATE_INHERITANCE.zh-CN.md).
+
+### Per-frame historical-offset backcheck and iteration sweep
+
+`scripts/run_frame_backcheck_resumable.ps1` runs 2/4/6 iterations with scoring
+off/on, keeping the diverse memory baseline and original weights. Each target
+frame compares center, history-offset and equal-count fixed-neighborhood
+evidence without changing predictions. The queue checks output equality,
+resumes per case, evaluates validation 10 and test 38 separately, then runs
+label-aware offline score analysis. Copy performance from
+`test-38/iteration-performance-test-38.csv` (scoring-off groups).
+See [the frozen experiment design](cotracker-algorithm/experiments/FRAME_BACKCHECK.zh-CN.md).

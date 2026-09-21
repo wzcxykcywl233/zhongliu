@@ -209,6 +209,7 @@ def _run_single_clip(
     feature_observer=None,
     initial_visibility_logits=None,
     initial_confidence_logits=None,
+    iteration_observer=None,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> tuple[TrackingResult, QueryFeatureMemory | None, torch.Tensor | None]:
     """
@@ -270,6 +271,8 @@ def _run_single_clip(
         model_kwargs["return_frame_features"] = True
     if feature_observer is not None:
         model_kwargs["feature_observer"] = feature_observer
+    if iteration_observer is not None:
+        model_kwargs["iteration_observer"] = iteration_observer
     out = model(**model_kwargs)
 
     # Always use original_N to ensure consistent shapes with ground truth
@@ -620,6 +623,7 @@ def hierarchical_forward_pass(
     query_memory_diversity_weight: float = 0.25,
     query_memory_refinement: str = "none",
     query_state_inheritance: str = "none",
+    frame_backcheck_rows=None,
     chain_trace=None,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
@@ -760,6 +764,9 @@ def hierarchical_forward_pass(
     # Preserve the exact prior that accompanied each query. A merged retry must
     # not use overwritten boundary predictions or the failed segment endpoint.
     boundary_states = {}
+    backcheck_pending = {}
+    if frame_backcheck_rows is not None and (batch != 1 or support_grid_size != 0 or n_iterations < 2):
+        raise ValueError("frame backcheck requires batch1, grid0 and >=2 iterations")
     for field in ("state_inherited_segments", "state_v_values", "state_c_values",
                   "state_v_abs_logit_sum", "state_c_abs_logit_sum",
                   "state_v_nonzero_values", "state_c_nonzero_values",
@@ -799,6 +806,12 @@ def hierarchical_forward_pass(
             query_memory is not None or capture_memory or validation_enabled
         )
         state_kwargs = {}
+        backcheck_capture = {}
+        if frame_backcheck_rows is not None:
+            def observe_iterations(history, features):
+                backcheck_capture['history'] = history
+                backcheck_capture['features'] = features
+            state_kwargs['iteration_observer'] = observe_iterations
         if query_state_inheritance != "none" and level_start > 0:
             prior_v, prior_c = boundary_states[level_start]
             _diagnostic_add(diagnostics, "state_inherited_segments", 1)
@@ -956,6 +969,14 @@ def hierarchical_forward_pass(
                 )
         if chain_trace is not None:
             chain_trace.tensor(trace_key + "/fused_trajectory", result.trajectories)
+        if frame_backcheck_rows is not None:
+            try:
+                from .frame_backcheck import score_frames
+            except ImportError:
+                from frame_backcheck import score_frames
+            backcheck_pending[(level_start, level_end)] = score_frames(
+                backcheck_capture['features'], level_queries, result.trajectories,
+                backcheck_capture['history'], level_start, model.stride)
         return result, captured
 
     def commit_query_memory(level_start, result, captured):
@@ -1014,6 +1035,12 @@ def hierarchical_forward_pass(
         )
 
     def store_level(level_start, level_end, result):
+        if frame_backcheck_rows is not None:
+            # Discard superseded segments on merge. Each nonquery frame has one
+            # final score, attached to the anchor that predicted that frame.
+            frame_backcheck_rows[:] = [r for r in frame_backcheck_rows if not level_start < r['frame'] <= level_end]
+            frame_backcheck_rows.extend(backcheck_pending[(level_start, level_end)])
+            backcheck_pending.clear()
         trajectories[:, level_start : level_end + 1] = result.trajectories
         visibility[:, level_start : level_end + 1] = result.visibility
         confidence[:, level_start : level_end + 1] = result.confidence

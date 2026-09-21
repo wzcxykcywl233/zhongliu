@@ -139,6 +139,7 @@ def run_algorithm(
             )
 
         mask_appearance_features = None
+        backcheck_rows = [] if config.frame_backcheck else None
         if config.hierarchical_span > 0:
             tracking_output = resources.hierarchical_forward_pass(
                 model=model,
@@ -160,6 +161,7 @@ def run_algorithm(
                 query_memory_mode=config.query_memory_mode,
                 query_memory_refinement=config.query_memory_refinement,
                 query_state_inheritance=config.query_state_inheritance,
+                frame_backcheck_rows=backcheck_rows,
                 chain_trace=_chain_trace,
                 query_memory_slots=config.query_memory_slots,
                 query_memory_min_reliability=(
@@ -348,6 +350,11 @@ def run_algorithm(
             _chain_trace.mask("native_mask", prediction.transpose(2, 1, 0)[None])
 
         if diagnostics is not None and numeric_diagnostics is not None:
+            if backcheck_rows is not None:
+                backcheck_rows.sort(key=lambda row: row['frame'])
+                if [row['frame'] for row in backcheck_rows] != list(range(1, T)):
+                    raise RuntimeError('Incomplete per-frame backcheck coverage')
+                diagnostics['frame_backcheck'] = backcheck_rows
             diagnostics["prediction"] = {
                 "shape": list(prediction.shape),
                 "foreground_voxels": int(np.count_nonzero(prediction)),

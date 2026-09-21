@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "reference": "backcheck_control_i2",
+  "reference_alias_of": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+  "training": false,
+  "splits": {"train": 40, "validation": 10, "test": 38},
+  "profiles": ["backcheck_control_i2", "backcheck_i2", "backcheck_control_i4", "backcheck_i4", "backcheck_control_i6", "backcheck_i6"],
+  "backcheck_analysis": true,
+  "scores": ["center", "center_history", "center_fixed"],
+  "score_combination": "0.5 center + 0.5 mean neighborhood cosine; same supported point set",
+  "history": "local CoTracker iterations 1..I-1 in each target frame; offsets from final fused point",
+  "query": "current segment anchor frame, not always original frame zero",
+  "offset_model_pixels": {"min": 0.5, "max": 16, "duplicate_distance": 0.5, "fixed_radius": 4},
+  "feature_level": 0,
+  "frame_analysis_min_supported_fraction": 0.1,
+  "bad_frame_dice_threshold": 0.8,
+  "evaluation": "No score feedback or retraining. All six profiles frozen before validation. Test-38 only for performance tables. Public test is already inspected; supplementary analysis, not blind selection."
+}

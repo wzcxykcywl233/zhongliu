@@ -87,6 +87,23 @@ try {
         & (Join-Path $RepoRoot "scripts\summarize_memory_refinement.ps1") `
             -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `
             -ManifestRelative $ManifestRelative -ResultPrefix $ResultPrefix
+        if ($Manifest.backcheck_analysis) {
+            $AnalysisLog = Join-Path $SplitResults 'backcheck-analysis.log'
+            $PreviousPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                & docker run --rm --network none --platform linux/amd64 `
+                    --mount "type=bind,source=$($Split.Path),target=/dataset,readonly" `
+                    --mount "type=bind,source=$SplitResults,target=/results" `
+                    --entrypoint /opt/app/.pixi/envs/cuda/bin/python `
+                    trackrad-algorithm-cotracker-algorithm `
+                    /opt/app/experiments/analyze_frame_backcheck.py `
+                    --dataset /dataset --results /results --split $Split.Name 2>&1 |
+                    Tee-Object -FilePath $AnalysisLog -Append | ForEach-Object { Write-Host $_ }
+                $AnalysisExit = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $PreviousPreference }
+            if ($AnalysisExit -ne 0) { throw "Backcheck analysis failed: exit=$AnalysisExit; rerun same command to resume" }
+        }
     }
     Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] $ResultPrefix queue completed"
 } finally {

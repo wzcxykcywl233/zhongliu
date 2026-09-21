@@ -11,6 +11,7 @@ from experiments import (
     HIERARCHICAL_EXPERIMENTS,
     MEMORY_REFINEMENT_EXPERIMENTS,
     QUERY_STATE_EXPERIMENTS,
+    FRAME_BACKCHECK_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -87,6 +88,7 @@ class ExperimentTests(unittest.TestCase):
             | set(HIERARCHICAL_EXPERIMENTS)
             | set(MEMORY_REFINEMENT_EXPERIMENTS)
             | set(QUERY_STATE_EXPERIMENTS)
+            | set(FRAME_BACKCHECK_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -546,6 +548,7 @@ class ExperimentTests(unittest.TestCase):
             {
                 *MEMORY_REFINEMENT_EXPERIMENTS,
                 *QUERY_STATE_EXPERIMENTS,
+                *FRAME_BACKCHECK_EXPERIMENTS,
                 "points_1500",
                 "hierarchical_full_grid0_mamba",
                 "hierarchical_full_grid0_mamba_replacement",

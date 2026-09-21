@@ -31,6 +31,7 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         feature_observer=None,
         initial_visibility_logits=None,
         initial_confidence_logits=None,
+        iteration_observer=None,
     ):
         """Predict tracks
 
@@ -336,4 +337,6 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
             # resolution. Returning it avoids a second encoder pass during
             # post-fusion appearance validation.
             extras.append(fmaps_pyramid[0].detach())
+        if iteration_observer is not None:
+            iteration_observer(tuple(p.detach() for p in coord_preds), fmaps_pyramid[0].detach())
         return result + tuple(extras)

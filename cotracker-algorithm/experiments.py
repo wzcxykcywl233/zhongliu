@@ -44,11 +44,17 @@ class ExperimentConfig:
     query_memory_diversity_weight: float = 0.25
     query_memory_refinement: str = "none"
     query_state_inheritance: str = "none"
+    frame_backcheck: bool = False
     mask_appearance_radius: int = 0
     mask_appearance_min_gain: float = 0.01
     mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.frame_backcheck and (self.hierarchical_span <= 0 or self.support_grid_size != 0 or self.n_iterations < 2
+                                    or self.temporal_median_window != 1 or self.query_state_inheritance != 'none'
+                                    or self.long_fusion_gate != 'none' or self.mask_appearance_radius != 0
+                                    or self.query_memory_refinement != 'none'):
+            raise ValueError('backcheck requires unmodified hierarchical grid0 trajectories and >=2 iterations')
         if self.query_state_inheritance not in {"none", "v", "c", "vc", "vc_decay", "vc_query"}:
             raise ValueError("unsupported query state inheritance")
         if self.query_state_inheritance != "none" and (self.hierarchical_span <= 0 or self.support_grid_size != 0):
@@ -403,6 +409,13 @@ QUERY_STATE_EXPERIMENTS = {
        for mode in ("v", "c", "vc", "vc_decay", "vc_query")},
 }
 
+FRAME_BACKCHECK_EXPERIMENTS = {
+    **{'backcheck_control_i' + str(n): replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], n_iterations=n)
+       for n in (2, 4, 6)},
+    **{'backcheck_i' + str(n): replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], n_iterations=n, frame_backcheck=True)
+       for n in (2, 4, 6)},
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
@@ -410,6 +423,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
     **AUDIT_EXPERIMENTS,
     **MEMORY_REFINEMENT_EXPERIMENTS,
     **QUERY_STATE_EXPERIMENTS,
+    **FRAME_BACKCHECK_EXPERIMENTS,
 }
 
 

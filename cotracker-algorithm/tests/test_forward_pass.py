@@ -37,6 +37,7 @@ class FakeCoTracker:
 
 
 class HierarchicalFakeCoTracker:
+    stride = 4
     def __init__(self, occluded_query_x=None) -> None:
         self.calls = []
         self.occluded_query_x = occluded_query_x
@@ -53,8 +54,9 @@ class HierarchicalFakeCoTracker:
         return_query_feature_memory=False,
         return_frame_features=False,
         feature_observer=None,
+        iteration_observer=None,
     ):
-        del iters, is_train
+        del is_train
         self.calls.append(
             {
                 "frames": video.shape[1],
@@ -78,6 +80,9 @@ class HierarchicalFakeCoTracker:
         if feature_observer is not None:
             feature_observer(0, "input_track", torch.ones(batch, 1, points, 4))
         result = (coordinates, visibility, confidence, None)
+        if iteration_observer is not None:
+            history = tuple(coordinates + (iters-1-index)*.75 for index in range(iters))
+            iteration_observer(history, torch.ones(batch, frames, 4, video.shape[-2]//4, video.shape[-1]//4))
         extras = []
         if return_query_feature_memory:
             track = torch.ones((batch, points, 4), dtype=video.dtype)
