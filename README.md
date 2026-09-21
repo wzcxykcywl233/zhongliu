@@ -218,3 +218,12 @@ retrieval). It records sampled pyramid features, full trajectories and masks,
 checks repeatability and prior outputs, and resumes per case/profile using
 hashed checkpoints. It does not train or access later-frame ground-truth masks.
 See [the diagnostic design and remote commands](cotracker-algorithm/experiments/MEMORY_CHAIN_DIAGNOSTICS.zh-CN.md).
+
+### Inherit visibility/confidence across dynamic query anchors
+
+`scripts/run_query_state_inheritance_resumable.ps1` runs six frozen inference
+profiles: fixed memory control, V-only, C-only, V+C, time-decayed V+C, and
+query-frame-only V+C. It uses original weights, no training, the existing
+40/10/38 protocol, case-level resume, frozen inputs and mechanism audits.
+Use the `test-38` CSV for performance reporting, not the validation CSV.
+See [design, risks and remote commands](cotracker-algorithm/experiments/QUERY_STATE_INHERITANCE.zh-CN.md).

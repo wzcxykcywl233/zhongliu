@@ -10,6 +10,7 @@ from experiments import (
     EXPERIMENTS,
     HIERARCHICAL_EXPERIMENTS,
     MEMORY_REFINEMENT_EXPERIMENTS,
+    QUERY_STATE_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -17,6 +18,18 @@ from experiments import (
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_query_state_profiles_only_change_initialization(self):
+        reference = EXPERIMENTS['memory_control']
+        for name, config in QUERY_STATE_EXPERIMENTS.items():
+            changed = [f.name for f in fields(config) if getattr(config, f.name) != getattr(reference, f.name)]
+            self.assertEqual(changed, [] if name == 'pvc_control' else ['query_state_inheritance'])
+        manifest = json.loads((Path(__file__).resolve().parents[1] / 'experiments' / 'query-state-40-10-38.json').read_text())
+        self.assertEqual(set(manifest['profiles']), set(QUERY_STATE_EXPERIMENTS))
+        for name, mode in manifest['state_modes'].items():
+            self.assertEqual(EXPERIMENTS[name].query_state_inheritance, mode)
+        with self.assertRaises(ValueError):
+            ExperimentConfig(query_state_inheritance='vc')
+
     def test_memory_refinement_has_one_changed_field_and_frozen_queue(self):
         reference = EXPERIMENTS["hierarchical_full_grid0_iterations2_memory_topk_diverse"]
         self.assertEqual(EXPERIMENTS["memory_control"], reference)
@@ -73,6 +86,7 @@ class ExperimentTests(unittest.TestCase):
             | set(COMBINATION_EXPERIMENTS)
             | set(HIERARCHICAL_EXPERIMENTS)
             | set(MEMORY_REFINEMENT_EXPERIMENTS)
+            | set(QUERY_STATE_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -531,6 +545,7 @@ class ExperimentTests(unittest.TestCase):
             excluded_names,
             {
                 *MEMORY_REFINEMENT_EXPERIMENTS,
+                *QUERY_STATE_EXPERIMENTS,
                 "points_1500",
                 "hierarchical_full_grid0_mamba",
                 "hierarchical_full_grid0_mamba_replacement",

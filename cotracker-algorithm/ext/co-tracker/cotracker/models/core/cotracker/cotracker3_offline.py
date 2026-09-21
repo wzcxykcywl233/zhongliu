@@ -29,6 +29,8 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         return_query_feature_memory=False,
         return_frame_features=False,
         feature_observer=None,
+        initial_visibility_logits=None,
+        initial_confidence_logits=None,
     ):
         """Predict tracks
 
@@ -191,6 +193,17 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
 
         vis = torch.zeros((B, T, N), device=device).float()
         confidence = torch.zeros((B, T, N), device=device).float()
+        for name, initial in (("visibility", initial_visibility_logits), ("confidence", initial_confidence_logits)):
+            if initial is not None:
+                if is_train:
+                    raise ValueError("query-state initialization is inference-only")
+                if initial.shape != (B, T, N) or not bool(torch.isfinite(initial).all()):
+                    raise ValueError("initial query-state logits must be finite B,T,N tensors")
+                initial = initial.detach().to(device=device, dtype=torch.float32).clone()
+                if name == "visibility":
+                    vis = initial
+                else:
+                    confidence = initial
         coords = queried_coords.reshape(B, 1, N, 2).expand(B, T, N, 2).float()
 
         r = 2 * self.corr_radius + 1

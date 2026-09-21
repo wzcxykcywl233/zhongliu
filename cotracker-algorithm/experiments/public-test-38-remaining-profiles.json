@@ -29,6 +29,12 @@
     {"name": "support_grid_15", "group": "slow_single_point", "display": "Support grid size fifteen; deliberately scheduled last"}
   ],
   "excluded": [
+    {"name": "pvc_control", "reason": "Dedicated query-state inheritance queue."},
+    {"name": "pvc_v", "reason": "Dedicated query-state inheritance queue."},
+    {"name": "pvc_c", "reason": "Dedicated query-state inheritance queue."},
+    {"name": "pvc_vc", "reason": "Dedicated query-state inheritance queue."},
+    {"name": "pvc_vc_decay", "reason": "Dedicated query-state inheritance queue."},
+    {"name": "pvc_vc_query", "reason": "Dedicated query-state inheritance queue."},
     {"name": "memory_control", "reason": "Dedicated memory-refinement queue."},
     {"name": "memory_pointwise_write", "reason": "Dedicated memory-refinement queue."},
     {"name": "memory_pointwise_fusion", "reason": "Dedicated memory-refinement queue."},

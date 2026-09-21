@@ -3,13 +3,16 @@ param(
     [string]$RepoRoot = "C:\zhongliu\zhongliu-tuning",
     [Parameter(Mandatory = $true)][string]$Results,
     [Parameter(Mandatory = $true)][int]$ExpectedCases,
-    [Parameter(Mandatory = $true)][ValidateSet('validation-10', 'test-38')][string]$SplitName
+    [Parameter(Mandatory = $true)][ValidateSet('validation-10', 'test-38')][string]$SplitName,
+    [string]$ManifestRelative = 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json',
+    [string]$ResultPrefix = 'memory-refinement'
 )
 $ErrorActionPreference = 'Stop'
-$Manifest = Get-Content (Join-Path $RepoRoot 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json') -Raw | ConvertFrom-Json
+$Manifest = Get-Content (Join-Path $RepoRoot $ManifestRelative) -Raw | ConvertFrom-Json
 $Profiles = @($Manifest.profiles)
 $MetricNames = [ordered]@{ DSC = 'dice_similarity_coefficient'; HD95 = 'hausdorff_distance_95'; MASD = 'surface_distance_average'; CD = 'center_distance'; D98 = 'relative_d98_dose' }
 $ReferenceCases = @{}
+$ReferenceHashes = @{}
 $Rows = @()
 $DiagnosticRows = @()
 $Summary = [ordered]@{}
@@ -33,8 +36,21 @@ foreach ($Profile in $Profiles) {
         $DiagnosticPath = Join-Path $Results "$Profile\checkpoint\jobs\$CaseId\diagnostics.json"
         $Diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
         if ($Diagnostic.profile -ne $Profile) { throw "Wrong diagnostic profile: $DiagnosticPath" }
+        if ($Manifest.state_modes) {
+            $OutputHash = [string]$Diagnostic.prediction.array_sha256
+            if (-not $OutputHash) { throw "Missing output hash: $Profile/$CaseId" }
+            if ($Profile -eq $Manifest.reference) { $ReferenceHashes[$CaseId] = $OutputHash }
+            $Row['OutputMatchesControl'] = $ReferenceHashes[$CaseId] -eq $OutputHash
+            $ExpectedMode = [string]$Manifest.state_modes.$Profile
+            if ($Diagnostic.config.query_state_inheritance -ne $ExpectedMode) { throw "Wrong inheritance mode: $Profile/$CaseId" }
+            foreach ($Key in @('state_inherited_segments','state_v_values','state_c_values','state_v_abs_logit_sum','state_c_abs_logit_sum')) {
+                if ($null -eq $Diagnostic.mechanism.$Key) { throw "Missing diagnostic $Key in $Profile/$CaseId" }
+            }
+            if ($ExpectedMode -in @('none','c') -and $Diagnostic.mechanism.state_v_values -ne 0) { throw 'Unexpected V inheritance' }
+            if ($ExpectedMode -in @('none','v') -and $Diagnostic.mechanism.state_c_values -ne 0) { throw 'Unexpected C inheritance' }
+        }
         foreach ($Property in $Diagnostic.mechanism.PSObject.Properties) {
-            if ($Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*') {
+            if ($Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*' -or $Property.Name -like 'state_*') {
                 $DiagnosticRows += [PSCustomObject]@{ Split = $SplitName; Profile = $Profile; Case = $CaseId; Mechanism = $Property.Name; Value = $Property.Value }
             }
         }
@@ -45,8 +61,18 @@ $SummaryJson = ConvertTo-Json -InputObject $Summary -Depth 100
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $Results 'summary.json.tmp'), $SummaryJson, $Utf8)
 Move-Item -LiteralPath (Join-Path $Results 'summary.json.tmp') -Destination (Join-Path $Results 'summary.json') -Force
-$Rows | Export-Csv (Join-Path $Results "memory-refinement-$SplitName-cases.csv") -NoTypeInformation -Encoding UTF8
-$DiagnosticRows | Export-Csv (Join-Path $Results "memory-refinement-$SplitName-diagnostics.csv") -NoTypeInformation -Encoding UTF8
+if ($Manifest.state_modes) {
+    foreach ($Profile in $Profiles) {
+        $Mode = [string]$Manifest.state_modes.$Profile
+        foreach ($Kind in @('v','c')) {
+            if ($Mode -eq 'none' -or ($Mode -in @('v','c') -and $Mode -ne $Kind)) { continue }
+            $Total = ($DiagnosticRows | Where-Object { $_.Profile -eq $Profile -and $_.Mechanism -eq "state_${Kind}_values" } | Measure-Object Value -Sum).Sum
+            if ($Total -le 0) { throw "Inheritance never activated: $Profile/$Kind" }
+        }
+    }
+}
+$Rows | Export-Csv (Join-Path $Results "$ResultPrefix-$SplitName-cases.csv") -NoTypeInformation -Encoding UTF8
+$DiagnosticRows | Export-Csv (Join-Path $Results "$ResultPrefix-$SplitName-diagnostics.csv") -NoTypeInformation -Encoding UTF8
 $DiagnosticRows | Group-Object Profile,Mechanism | ForEach-Object {
     $GroupRows = @($_.Group)
     [PSCustomObject]@{
@@ -55,7 +81,7 @@ $DiagnosticRows | Group-Object Profile,Mechanism | ForEach-Object {
         NonzeroCases = @($GroupRows | Where-Object { [double]$_.Value -ne 0 }).Count
         Total = ($GroupRows | Measure-Object Value -Sum).Sum
     }
-} | Export-Csv (Join-Path $Results "memory-refinement-$SplitName-mechanisms.csv") -NoTypeInformation -Encoding UTF8
+} | Export-Csv (Join-Path $Results "$ResultPrefix-$SplitName-mechanisms.csv") -NoTypeInformation -Encoding UTF8
 & (Join-Path $RepoRoot 'scripts\summarize_dynamic_query_memory.ps1') `
-    -Results $Results -Prefix "memory-refinement-$SplitName" `
+    -Results $Results -Prefix "$ResultPrefix-$SplitName" `
     -ReferenceName $Manifest.reference -Candidates @($Profiles | Where-Object { $_ -ne $Manifest.reference })

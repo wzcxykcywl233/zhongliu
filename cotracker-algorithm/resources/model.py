@@ -174,6 +174,27 @@ def _add_support_grid(
     return torch.cat([queries, grid_points], dim=1), original_points
 
 
+def inherited_state_logits(probability, frames, mode, span):
+    """Boundary probabilities -> inference logits; decay towards neutral 0.5."""
+    if probability.ndim != 2 or not bool(torch.isfinite(probability).all()):
+        raise ValueError("boundary probability must be finite B,N")
+    if bool(((probability < 0) | (probability > 1)).any()):
+        raise ValueError("boundary probability outside [0,1]")
+    if frames < 1 or span <= 0:
+        raise ValueError("invalid state initialization span")
+    base = torch.logit(probability.detach().float().clamp(1e-4, 1 - 1e-4))
+    offsets = torch.arange(frames, device=base.device).float()
+    if mode == "vc_decay":
+        scale = torch.exp(-offsets / span)
+    elif mode == "vc_query":
+        scale = (offsets == 0).float()
+    elif mode in {"v", "c", "vc"}:
+        scale = torch.ones_like(offsets)
+    else:
+        raise ValueError("unsupported inheritance mode")
+    return base[:, None, :] * scale[None, :, None]
+
+
 def _run_single_clip(
     model: CoTrackerThreeOffline,
     video: torch.Tensor,
@@ -186,6 +207,8 @@ def _run_single_clip(
     return_query_feature_memory: bool = False,
     return_frame_features: bool = False,
     feature_observer=None,
+    initial_visibility_logits=None,
+    initial_confidence_logits=None,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
 ) -> tuple[TrackingResult, QueryFeatureMemory | None, torch.Tensor | None]:
     """
@@ -227,6 +250,14 @@ def _run_single_clip(
         "iters": n_iterations,
         "is_train": False,
     }
+    for name, initial in (("initial_visibility_logits", initial_visibility_logits),
+                          ("initial_confidence_logits", initial_confidence_logits)):
+        if initial is not None:
+            if initial.shape != (video.shape[0], output_length, original_N):
+                raise ValueError("initial state must match the full clip and boundary queries")
+            if queries.shape[1] != original_N:
+                raise ValueError("inherited state does not support added grid points")
+            model_kwargs[name] = initial.to(device).index_select(1, key_indices)
     if query_feature_memory is not None:
         model_kwargs["query_feature_memory"] = query_feature_memory if callable(query_feature_memory) else (
             query_feature_memory.track,
@@ -588,6 +619,7 @@ def hierarchical_forward_pass(
     query_memory_original_floor: float = 0.3,
     query_memory_diversity_weight: float = 0.25,
     query_memory_refinement: str = "none",
+    query_state_inheritance: str = "none",
     chain_trace=None,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
@@ -721,6 +753,25 @@ def hierarchical_forward_pass(
             ):
                 diagnostics[key] = 0
 
+    if query_state_inheritance not in {"none", "v", "c", "vc", "vc_decay", "vc_query"}:
+        raise ValueError("unsupported query state inheritance")
+    if query_state_inheritance != "none" and support_grid_size != 0:
+        raise ValueError("query state inheritance requires grid0")
+    # Preserve the exact prior that accompanied each query. A merged retry must
+    # not use overwritten boundary predictions or the failed segment endpoint.
+    boundary_states = {}
+    for field in ("state_inherited_segments", "state_v_values", "state_c_values",
+                  "state_v_abs_logit_sum", "state_c_abs_logit_sum",
+                  "state_v_nonzero_values", "state_c_nonzero_values",
+                  "state_v_high_prior_points", "state_c_high_prior_points",
+                  "state_v_low_prior_points", "state_c_low_prior_points"):
+        _diagnostic_add(diagnostics, field, 0)
+
+    def remember_boundary(frame, result):
+        if query_state_inheritance != "none":
+            boundary_states[frame] = (result.visibility[:, -1].detach().clone(),
+                                      result.confidence[:, -1].detach().clone())
+
     def run_level(level_start, level_end, level_queries):
         nonlocal original_memory
         trace_key = chain_trace.begin_level(level_start, level_end, level_queries) if chain_trace is not None else None
@@ -747,6 +798,21 @@ def hierarchical_forward_pass(
         return_memory = (
             query_memory is not None or capture_memory or validation_enabled
         )
+        state_kwargs = {}
+        if query_state_inheritance != "none" and level_start > 0:
+            prior_v, prior_c = boundary_states[level_start]
+            _diagnostic_add(diagnostics, "state_inherited_segments", 1)
+            for kind, probability in (("v", prior_v), ("c", prior_c)):
+                if query_state_inheritance in {"v", "c"} and kind != query_state_inheritance:
+                    continue
+                initial = inherited_state_logits(probability, level_end - level_start + 1, query_state_inheritance, span)
+                field = "initial_visibility_logits" if kind == "v" else "initial_confidence_logits"
+                state_kwargs[field] = initial
+                _diagnostic_add(diagnostics, "state_" + kind + "_values", initial.numel())
+                _diagnostic_add(diagnostics, "state_" + kind + "_abs_logit_sum", float(initial.abs().sum().item()))
+                _diagnostic_add(diagnostics, "state_" + kind + "_nonzero_values", int((initial.abs() > 1e-6).sum().item()))
+                _diagnostic_add(diagnostics, "state_" + kind + "_high_prior_points", int((probability > .99).sum().item()))
+                _diagnostic_add(diagnostics, "state_" + kind + "_low_prior_points", int((probability < .01).sum().item()))
         result, captured, frame_features = _run_single_clip(
             model,
             video[:, level_start : level_end + 1],
@@ -758,6 +824,7 @@ def hierarchical_forward_pass(
             return_query_feature_memory=return_memory,
             return_frame_features=validation_enabled,
             feature_observer=(chain_trace.observer(trace_key) if chain_trace is not None else None),
+            **state_kwargs,
             device=device,
         )
         if chain_trace is not None:
@@ -984,6 +1051,7 @@ def hierarchical_forward_pass(
             commit_query_memory(merge_start, merged_result, merged_memory)
             store_level(merge_start, merge_end, merged_result)
             start = merge_end
+            remember_boundary(start, merged_result)
             current_queries = torch.cat(
                 [
                     torch.zeros_like(merge_queries[..., :1]),
@@ -1001,6 +1069,7 @@ def hierarchical_forward_pass(
         previous_start = start
         previous_queries = current_queries.clone()
         start = end
+        remember_boundary(start, level_result)
         current_queries = torch.cat(
             [
                 torch.zeros_like(current_queries[..., :1]),

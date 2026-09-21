@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "reference": "pvc_control",
+  "reference_alias_of": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+  "training": false,
+  "splits": {"train": 40, "validation": 10, "test": 38},
+  "profiles": ["pvc_control", "pvc_v", "pvc_c", "pvc_vc", "pvc_vc_decay", "pvc_vc_query"],
+  "state_modes": {"pvc_control": "none", "pvc_v": "v", "pvc_c": "c", "pvc_vc": "vc", "pvc_vc_decay": "vc_decay", "pvc_vc_query": "vc_query"},
+  "state_source": "Previous committed fused segment endpoint, detached. Merge retries reuse the prior stored for the matching start anchor.",
+  "probability_clamp": [0.0001, 0.9999],
+  "decay": "exp(-frame_offset / hierarchical_span) applied to logits; span stays 10 even in merged segments",
+  "first_segment": "unchanged zero logits (probability 0.5)",
+  "global_branch": "unchanged",
+  "evaluation": "Frozen six-profile inference ablation, no training or test-label adaptation. Validation and test reported separately; 38-case test is the performance table. Public test is not a new blind holdout."
+}

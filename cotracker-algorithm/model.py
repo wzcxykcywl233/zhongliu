@@ -159,6 +159,7 @@ def run_algorithm(
                 feature_revalidate_radius=config.feature_revalidate_radius,
                 query_memory_mode=config.query_memory_mode,
                 query_memory_refinement=config.query_memory_refinement,
+                query_state_inheritance=config.query_state_inheritance,
                 chain_trace=_chain_trace,
                 query_memory_slots=config.query_memory_slots,
                 query_memory_min_reliability=(

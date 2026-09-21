@@ -43,11 +43,16 @@ class ExperimentConfig:
     query_memory_original_floor: float = 0.3
     query_memory_diversity_weight: float = 0.25
     query_memory_refinement: str = "none"
+    query_state_inheritance: str = "none"
     mask_appearance_radius: int = 0
     mask_appearance_min_gain: float = 0.01
     mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.query_state_inheritance not in {"none", "v", "c", "vc", "vc_decay", "vc_query"}:
+            raise ValueError("unsupported query state inheritance")
+        if self.query_state_inheritance != "none" and (self.hierarchical_span <= 0 or self.support_grid_size != 0):
+            raise ValueError("query state inheritance requires hierarchical matching and grid0")
         if self.query_memory_refinement not in {"none", "pointwise_write", "pointwise_fusion", "current_retrieval", "cycle_write", "contour_guard", "recent_slot"}:
             raise ValueError("unsupported memory refinement")
         if self.query_memory_refinement != "none" and (
@@ -392,12 +397,19 @@ MEMORY_REFINEMENT_EXPERIMENTS = {
     },
 }
 
+QUERY_STATE_EXPERIMENTS = {
+    "pvc_control": MEMORY_REFINEMENT_EXPERIMENTS["memory_control"],
+    **{"pvc_" + mode: replace(MEMORY_REFINEMENT_EXPERIMENTS["memory_control"], query_state_inheritance=mode)
+       for mode in ("v", "c", "vc", "vc_decay", "vc_query")},
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
     **HIERARCHICAL_EXPERIMENTS,
     **AUDIT_EXPERIMENTS,
     **MEMORY_REFINEMENT_EXPERIMENTS,
+    **QUERY_STATE_EXPERIMENTS,
 }
 
 

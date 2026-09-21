@@ -5,7 +5,9 @@ param(
     [string]$ValidationDataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_validation_10",
     [string]$TestDataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_public_test_38",
     [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\memory-refinement",
-    [ValidateSet("all", "validation", "test")][string]$Stage = "all"
+    [ValidateSet("all", "validation", "test")][string]$Stage = "all",
+    [string]$ManifestRelative = 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json',
+    [string]$ResultPrefix = 'memory-refinement'
 )
 $ErrorActionPreference = "Stop"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -16,7 +18,7 @@ try {
     Start-Transcript -Path (Join-Path $ResultsRoot "queue.log") -Append | Out-Null
     $TranscriptStarted = $true
     $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-    $ManifestPath = Join-Path $RepoRoot "cotracker-algorithm\experiments\memory-refinement-40-10-38.json"
+    $ManifestPath = Join-Path $RepoRoot $ManifestRelative
     $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $Profiles = @($Manifest.profiles)
     $Checkpoint = Join-Path $RepoRoot "cotracker-algorithm\torch\hub\checkpoints\scaled_offline.pth"
@@ -68,7 +70,7 @@ try {
         [System.IO.File]::WriteAllText("$FrozenPath.tmp", $FrozenJson, $Utf8)
         Move-Item -LiteralPath "$FrozenPath.tmp" -Destination $FrozenPath
     }
-    Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] Memory refinement queue started: $Stage"
+    Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] $ResultPrefix queue started: $Stage"
     foreach ($Split in $SplitSpecs | Where-Object Name -ne 'train-40') {
         if ($Stage -eq 'validation' -and $Split.Name -ne 'validation-10') { continue }
         if ($Stage -eq 'test' -and $Split.Name -ne 'test-38') { continue }
@@ -83,9 +85,10 @@ try {
             -Repository $RepoRoot -Dataset $Split.Path -Results $SplitResults `
             -Profiles $Profiles -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint
         & (Join-Path $RepoRoot "scripts\summarize_memory_refinement.ps1") `
-            -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name
+            -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `
+            -ManifestRelative $ManifestRelative -ResultPrefix $ResultPrefix
     }
-    Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] Memory refinement queue completed"
+    Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] $ResultPrefix queue completed"
 } finally {
     if ($TranscriptStarted) { Stop-Transcript | Out-Null }
     $QueueLock.Dispose()
