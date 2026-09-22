@@ -111,6 +111,12 @@ class FrameBackcheckTests(unittest.TestCase):
         self.assertIsNone(analysis.statistics([],'center')['spearman_score_vs_dice'])
 
     def test_offline_analysis_exports_and_rejects_changed_predictions(self):
+        self.check_analysis('iterations')
+
+    def test_fourway_analysis_exports_and_rejects_changed_predictions(self):
+        self.check_analysis('fourway')
+
+    def check_analysis(self, mode):
         # Exercise all filesystem/schema plumbing without requiring SimpleITK
         # locally. Actual MHA decoding remains the standard evaluation library.
         with tempfile.TemporaryDirectory() as directory:
@@ -130,9 +136,12 @@ class FrameBackcheckTests(unittest.TestCase):
                 label = target/f'{case}_labels.mha'
                 label.touch()
                 arrays[str(label)] = np.ones((2,2,3))
-            for n in (2,4,6):
+            fourway = mode == 'fourway'
+            for n in ((2,) if fourway else (2,4,6)):
                 for enabled in (False,True):
                     profile = f'backcheck_i{n}' if enabled else f'backcheck_control_i{n}'
+                    if fourway:
+                        profile = 'fourway_backcheck_i2' if enabled else 'fourway_control_i2'
                     folder = results/profile
                     folder.mkdir()
                     write_json(folder/'metrics.json', {'results':[{'case_id':c} for c in cases],
@@ -144,24 +153,31 @@ class FrameBackcheckTests(unittest.TestCase):
                         image.write_bytes(b'fixture')
                         arrays[str(image)] = np.ones((2,2,3))
                         rows = [dict(frame=t, points=10, supported_points=10,
-                                     center=.9,center_history=.8,center_fixed=.7) for t in (1,2)]
+                                     center=.9,center_history=.8,center_fixed=.7,
+                                     center_history_four=.85,center_fixed_four=.75,
+                                     radius_rejected_points=0,degenerate_rejected_points=0,
+                                     bounds_rejected_points=0) for t in (1,2)]
                         write_json(job/'diagnostics.json', {'profile':profile,
-                            'config':{'n_iterations':n,'frame_backcheck':enabled},
+                            'config':{'n_iterations':n,'frame_backcheck':enabled,'frame_backcheck_fourway':fourway and enabled},
                             'prediction':{'output_file_sha256':analysis.sha256(image),'array_sha256':'equal'},
                             'frame_backcheck':rows})
             fake_sitk = SimpleNamespace(ReadImage=lambda p: arrays[p],GetArrayFromImage=lambda x:x)
             with patch.dict('sys.modules', {'SimpleITK':fake_sitk}):
-                analysis.analyze(dataset,results,'validation-10')
-                summary = analysis.read_json(results/'backcheck-analysis-summary.json')
-                self.assertEqual(summary['output_pairs'],30)
+                analysis.analyze(dataset,results,'validation-10',mode)
+                prefix = 'fourway' if fourway else 'backcheck'
+                summary = analysis.read_json(results/f'{prefix}-analysis-summary.json')
+                self.assertEqual(summary['output_pairs'],10 if fourway else 30)
                 self.assertEqual(summary['common_frames'],20)
-                self.assertTrue((results/'iteration-performance-validation-10.csv').exists())
-                path = results/'backcheck_i2'/'checkpoint'/'jobs'/cases[0]/'diagnostics.json'
+                performance_prefix = 'fourway-control-performance' if fourway else 'iteration-performance'
+                self.assertTrue((results/f'{performance_prefix}-validation-10.csv').exists())
+                if fourway:
+                    self.assertTrue((results/'fourway-case-deltas-vs-center.csv').exists())
+                path = results/('fourway_backcheck_i2' if fourway else 'backcheck_i2')/'checkpoint'/'jobs'/cases[0]/'diagnostics.json'
                 data = analysis.read_json(path)
                 data['prediction']['array_sha256'] = 'changed'
                 write_json(path,data)
                 with self.assertRaisesRegex(ValueError,'Observer changed prediction'):
-                    analysis.analyze(dataset,results,'validation-10')
+                    analysis.analyze(dataset,results,'validation-10',mode)
 
 
 if __name__ == '__main__':

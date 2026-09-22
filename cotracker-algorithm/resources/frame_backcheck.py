@@ -85,3 +85,70 @@ def score_frames(features, queries, final, iterations, start, stride=4):
         }
         rows.append(row)
     return rows
+
+
+def score_fourway_frames(features, queries, final, iterations, start, stride=4):
+    """Observation only. Four scores share points with FOUR valid distinct probes.
+
+    At two iterations there is one historical update before the final update.
+    Reflect its offset about x/y axes; do not rotate or search for a new center.
+    Axis-degenerate and out-of-bounds groups are excluded, not zero-filled.
+    """
+    if final.shape[0] != 1 or features.shape[:2] != final.shape[:2]:
+        raise ValueError('four-way backcheck expects one aligned video batch')
+    if len(iterations) != 2 or any(x.shape != final.shape for x in iterations):
+        raise ValueError('four-way backcheck requires exactly two iterations')
+    if not all(bool(torch.isfinite(x).all()) for x in (features, queries, final, *iterations)):
+        raise ValueError('nonfinite four-way input')
+    # Explicit device/dtype alignment prevents CPU/GPU mixed grid sampling.
+    final = final.to(device=features.device, dtype=torch.float32)
+    previous = iterations[0].to(device=features.device, dtype=torch.float32)
+    q = queries[..., 1:3].to(device=features.device, dtype=torch.float32)
+    reference = features[:, 0].float()
+    signs = final.new_tensor([[1,1],[-1,1],[-1,-1],[1,-1]])
+    fixed = signs * (4 / math.sqrt(2))  # radius 4, diagonal four-way control
+    rows = []
+    def mean_or_none(values):
+        return float(values.mean().item()) if values.numel() else None
+    for t in range(1, final.shape[1]):
+        p, target = final[:,t], features[:,t].float()
+        delta = previous[:,t] - p
+        radius = torch.linalg.vector_norm(delta, dim=-1)
+        offsets = delta[...,None,:] * signs
+        center_valid = inside(q,reference,stride) & inside(p,target,stride)
+        valid_radius = (radius >= .5) & (radius <= 16)
+        # Pairwise distance >= .5 guarantees four distinct offsets. In
+        # particular dx=0 or dy=0 would duplicate two pairs and is rejected.
+        distinct = torch.ones_like(center_valid)
+        bounds = torch.ones_like(center_valid)
+        for j in range(4):
+            for k in range(j):
+                distinct &= torch.linalg.vector_norm(offsets[...,j,:]-offsets[...,k,:],dim=-1) >= .5
+            for offset in (offsets[...,j,:],fixed[j]):
+                bounds &= inside(q+offset,reference,stride) & inside(p+offset,target,stride)
+        supported = center_valid & valid_radius & distinct & bounds
+        def similarity(offset):
+            return (sample(reference,q+offset,stride)*sample(target,p+offset,stride)).sum(-1).clamp(-1,1)
+        center = similarity(p.new_zeros(2))
+        hs = torch.stack([similarity(offsets[...,j,:]) for j in range(4)],dim=-1)
+        fs = torch.stack([similarity(fixed[j]) for j in range(4)],dim=-1)
+        history4, fixed4 = hs.mean(-1), fs.mean(-1)
+        row = dict(frame=start+t, query_frame=start, points=p.shape[1],
+            center_valid_points=int(center_valid.sum()), supported_points=int(supported.sum()),
+            radius_rejected_points=int((center_valid & ~valid_radius).sum()),
+            degenerate_rejected_points=int((center_valid & valid_radius & ~distinct).sum()),
+            bounds_rejected_points=int((center_valid & valid_radius & distinct & ~bounds).sum()),
+            accepted_probes=4*int(supported.sum()), possible_probes=4*p.shape[1],
+            mean_radius=mean_or_none(radius[supported]),
+            center_all=mean_or_none(center[center_valid]), center=mean_or_none(center[supported]),
+            history_single=mean_or_none(hs[...,0][supported]),
+            history_four=mean_or_none(history4[supported]), fixed_four=mean_or_none(fixed4[supported]),
+            center_history=mean_or_none(((center+hs[...,0])/2)[supported]),
+            center_history_four=mean_or_none(((center+history4)/2)[supported]),
+            center_fixed_four=mean_or_none(((center+fixed4)/2)[supported]),
+            history_direction_range=mean_or_none((hs.max(-1).values-hs.min(-1).values)[supported]))
+        for j in range(4):
+            row[f'history_direction_{j}'] = mean_or_none(hs[...,j][supported])
+            row[f'fixed_direction_{j}'] = mean_or_none(fs[...,j][supported])
+        rows.append(row)
+    return rows

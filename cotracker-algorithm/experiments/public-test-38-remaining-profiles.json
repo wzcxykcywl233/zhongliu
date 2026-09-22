@@ -29,6 +29,8 @@
     {"name": "support_grid_15", "group": "slow_single_point", "display": "Support grid size fifteen; deliberately scheduled last"}
   ],
   "excluded": [
+    {"name": "fourway_control_i2", "reason": "Dedicated four-way backcheck queue."},
+    {"name": "fourway_backcheck_i2", "reason": "Dedicated four-way backcheck queue."},
     {"name": "backcheck_control_i2", "reason": "Dedicated per-frame backcheck queue."},
     {"name": "backcheck_control_i4", "reason": "Dedicated per-frame backcheck queue."},
     {"name": "backcheck_control_i6", "reason": "Dedicated per-frame backcheck queue."},

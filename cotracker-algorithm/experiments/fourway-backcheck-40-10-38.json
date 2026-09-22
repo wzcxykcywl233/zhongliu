@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "reference": "fourway_control_i2",
+  "reference_alias_of": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+  "training": false,
+  "splits": {"train": 40, "validation": 10, "test": 38},
+  "profiles": ["fourway_control_i2", "fourway_backcheck_i2"],
+  "backcheck_analysis": "fourway",
+  "scores": ["center", "center_history", "center_history_four", "center_fixed_four"],
+  "iterations": 2,
+  "history": "first local update minus final fused point; reflect (+dx,+dy),(-dx,+dy),(-dx,-dy),(+dx,-dy) in every target frame",
+  "query": "current segment query frame",
+  "fixed_offsets": "(+a,+a),(-a,+a),(-a,-a),(+a,-a), a=4/sqrt(2) model pixels",
+  "score_combination": "0.5 center + 0.5 mean neighborhood cosine",
+  "shared_support": "all four historical and four fixed locations valid; historical offsets distinct with pairwise distance >=0.5; same points for all four scores",
+  "offset_model_pixels": {"min": 0.5, "max": 16, "duplicate_distance": 0.5, "fixed_radius": 4},
+  "feature_level": 0,
+  "frame_analysis_min_supported_fraction": 0.1,
+  "bad_frame_dice_threshold": 0.8,
+  "evaluation": "Observation only: no position/V/C/memory feedback. Four scores in ONE candidate pass, plus one off-control. Test-38 performance only; validation separate. Previously inspected test, not a blind confirmation."
+}

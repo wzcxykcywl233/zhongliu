@@ -162,6 +162,7 @@ def run_algorithm(
                 query_memory_refinement=config.query_memory_refinement,
                 query_state_inheritance=config.query_state_inheritance,
                 frame_backcheck_rows=backcheck_rows,
+                frame_backcheck_fourway=config.frame_backcheck_fourway,
                 chain_trace=_chain_trace,
                 query_memory_slots=config.query_memory_slots,
                 query_memory_min_reliability=(

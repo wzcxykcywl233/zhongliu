@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 SCORES = ('center', 'center_history', 'center_fixed')
+FOURWAY_SCORES = ('center', 'center_history', 'center_history_four', 'center_fixed_four')
 
 
 def read_json(path):
@@ -53,16 +54,22 @@ def export_csv(path, rows):
     tmp.replace(path)
 
 
-def analyze(dataset, results, split):
+def analyze(dataset, results, split, mode='iterations'):
     import SimpleITK as sitk
+    if mode not in ('iterations', 'fourway'):
+        raise ValueError('Unknown analysis mode')
+    fourway = mode == 'fourway'
+    iteration_counts = (2,) if fourway else (2,4,6)
+    scores = FOURWAY_SCORES if fourway else SCORES
+    prefix = 'fourway' if fourway else 'backcheck'
     expected = 38 if split == 'test-38' else 10
     cases = sorted(p.name for p in dataset.iterdir() if p.is_dir())
     if len(cases) != expected:
         raise ValueError('Unexpected case count')
     frame_rows, checks, performance = [], [], []
-    for iterations in (2, 4, 6):
-        reference = f'backcheck_control_i{iterations}'
-        candidate = f'backcheck_i{iterations}'
+    for iterations in iteration_counts:
+        reference = 'fourway_control_i2' if fourway else f'backcheck_control_i{iterations}'
+        candidate = 'fourway_backcheck_i2' if fourway else f'backcheck_i{iterations}'
         for profile in (reference, candidate):
             metrics = read_json(results / profile / 'metrics.json')
             if sorted(r['case_id'] for r in metrics['results']) != cases:
@@ -87,10 +94,13 @@ def analyze(dataset, results, split):
             observed, image = diagnostic(candidate)
             if control['config']['frame_backcheck'] or not observed['config']['frame_backcheck']:
                 raise ValueError('Observation flags incorrect')
+            if fourway and (control['config'].get('frame_backcheck_fourway') or
+                            not observed['config'].get('frame_backcheck_fourway')):
+                raise ValueError('Four-way flags incorrect')
             equal = control['prediction']['array_sha256'] == observed['prediction']['array_sha256']
             checks.append({'Split': split, 'Case': case, 'Iterations': iterations, 'ExactOutputMatch': equal})
             if not equal:
-                export_csv(results / 'backcheck-output-checks.csv', checks)
+                export_csv(results / f'{prefix}-output-checks.csv', checks)
                 raise ValueError(f'Observer changed prediction: {candidate}/{case}')
             # The official evaluator prefers STAPLE labels if present.
             label = dataset / case / 'targets' / f'{case}_staple_labels.mha'
@@ -109,14 +119,14 @@ def analyze(dataset, results, split):
                 enough = record['supported_points'] >= .1 * record['points']
                 frame_rows.append({'Split': split, 'Case': case, 'Iterations': iterations, **record,
                                    'dice': dice, 'analysis_eligible': dice is not None and enough
-                                   and all(record[s] is not None and np.isfinite(record[s]) for s in SCORES)})
-    usable = {n: [r for r in frame_rows if r['Iterations'] == n and r['analysis_eligible']] for n in (2,4,6)}
-    common = set.intersection(*({(r['Case'],r['frame']) for r in usable[n]} for n in (2,4,6)))
+                                   and all(record[s] is not None and np.isfinite(record[s]) for s in scores)})
+    usable = {n: [r for r in frame_rows if r['Iterations'] == n and r['analysis_eligible']] for n in iteration_counts}
+    common = set.intersection(*({(r['Case'],r['frame']) for r in usable[n]} for n in iteration_counts))
     summaries, case_stats = [], []
-    for n in (2,4,6):
-        for scope in ('all_supported', 'common_i2_i4_i6'):
+    for n in iteration_counts:
+        for scope in (('common_four_scores',) if fourway else ('all_supported', 'common_i2_i4_i6')):
             rows = [r for r in usable[n] if scope == 'all_supported' or (r['Case'],r['frame']) in common]
-            for score in SCORES:
+            for score in scores:
                 values = []
                 for case in cases:
                     stats = statistics([r for r in rows if r['Case'] == case], score)
@@ -126,18 +136,33 @@ def analyze(dataset, results, split):
                 summaries.append({'Split':split,'Iterations':n,'Scope':scope,'Score':score, **statistics(rows,score),
                                   'macro_case_spearman': float(np.mean(values)) if values else None,
                                   'cases_with_defined_spearman':len(values),
-                                  'eligible_frame_fraction': len(rows)/sum(r['Iterations']==n for r in frame_rows)})
-    export_csv(results / 'backcheck-frames.csv', frame_rows)
-    export_csv(results / 'backcheck-score-summary.csv', summaries)
-    export_csv(results / 'backcheck-score-cases.csv', case_stats)
-    export_csv(results / 'backcheck-output-checks.csv', checks)
-    export_csv(results / f'iteration-performance-{split}.csv', performance)
-    summary = {'split':split,'cases':len(cases),'output_pairs':len(checks),'all_outputs_exact':True,
+                                  'eligible_frame_fraction': len(rows)/max(1,sum(r['Iterations']==n for r in frame_rows))})
+    export_csv(results / f'{prefix}-frames.csv', frame_rows)
+    export_csv(results / f'{prefix}-score-summary.csv', summaries)
+    export_csv(results / f'{prefix}-score-cases.csv', case_stats)
+    export_csv(results / f'{prefix}-output-checks.csv', checks)
+    export_csv(results / f'{"fourway-control-performance" if fourway else "iteration-performance"}-{split}.csv', performance)
+    if fourway:
+        deltas = []
+        for candidate in scores[1:]:
+            for case in cases:
+                paired = [r for r in case_stats if r['Case']==case]
+                a = next(r for r in paired if r['Score']==candidate)
+                b = next(r for r in paired if r['Score']=='center')
+                row = {'Split':split,'Case':case,'Score':candidate,'Reference':'center'}
+                for field in ('spearman_score_vs_dice','auc_low_score_detects_bad'):
+                    row['Delta_'+field] = a[field]-b[field] if a[field] is not None and b[field] is not None else None
+                deltas.append(row)
+        export_csv(results/'fourway-case-deltas-vs-center.csv',deltas)
+    summary = {'split':split,'mode':mode,'cases':len(cases),'output_pairs':len(checks),'all_outputs_exact':True,
                'scored_frames':{str(n):len(usable[n]) for n in usable}, 'common_frames':len(common),
                'note':'Scores are uncalibrated evidence, not probabilities. Frame Dice is diagnostic only. Official performance comes from metrics.json. No p-values: frames are correlated.'}
-    tmp = results / 'backcheck-analysis-summary.json.tmp'
+    if fourway:
+        summary['point_rejections'] = {key:sum(r[key] for r in frame_rows) for key in
+            ('radius_rejected_points','degenerate_rejected_points','bounds_rejected_points')}
+    tmp = results / f'{prefix}-analysis-summary.json.tmp'
     tmp.write_text(json.dumps(summary, indent=2, allow_nan=False), encoding='utf-8')
-    tmp.replace(results / 'backcheck-analysis-summary.json')
+    tmp.replace(results / f'{prefix}-analysis-summary.json')
     print(json.dumps(summary), flush=True)
 
 
@@ -146,5 +171,6 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=Path, required=True)
     parser.add_argument('--results', type=Path, required=True)
     parser.add_argument('--split', choices=('test-38','validation-10'), required=True)
+    parser.add_argument('--mode', choices=('iterations','fourway'), default='iterations')
     args = parser.parse_args()
-    analyze(args.dataset, args.results, args.split)
+    analyze(args.dataset, args.results, args.split, args.mode)

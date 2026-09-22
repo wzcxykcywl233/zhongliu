@@ -238,3 +238,11 @@ resumes per case, evaluates validation 10 and test 38 separately, then runs
 label-aware offline score analysis. Copy performance from
 `test-38/iteration-performance-test-38.csv` (scoring-off groups).
 See [the frozen experiment design](cotracker-algorithm/experiments/FRAME_BACKCHECK.zh-CN.md).
+# Four-way per-frame backcheck (observation only)
+
+Fixed two-iteration diverse-memory control; compare center, single historical
+offset, four mirrored historical offsets, and fixed four-way offsets on identical
+supported points. Two inference profiles compute four scores without position,
+confidence, or memory feedback. Run `scripts/run_fourway_backcheck_resumable.ps1`;
+results are isolated under `protocol-40-10-38/fourway-backcheck`.
+See [四向回查实验说明](cotracker-algorithm/experiments/FOURWAY_BACKCHECK.zh-CN.md).

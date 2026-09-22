@@ -624,6 +624,7 @@ def hierarchical_forward_pass(
     query_memory_refinement: str = "none",
     query_state_inheritance: str = "none",
     frame_backcheck_rows=None,
+    frame_backcheck_fourway=False,
     chain_trace=None,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
@@ -971,10 +972,11 @@ def hierarchical_forward_pass(
             chain_trace.tensor(trace_key + "/fused_trajectory", result.trajectories)
         if frame_backcheck_rows is not None:
             try:
-                from .frame_backcheck import score_frames
+                from .frame_backcheck import score_frames, score_fourway_frames
             except ImportError:
-                from frame_backcheck import score_frames
-            backcheck_pending[(level_start, level_end)] = score_frames(
+                from frame_backcheck import score_frames, score_fourway_frames
+            scorer = score_fourway_frames if frame_backcheck_fourway else score_frames
+            backcheck_pending[(level_start, level_end)] = scorer(
                 backcheck_capture['features'], level_queries, result.trajectories,
                 backcheck_capture['history'], level_start, model.stride)
         return result, captured

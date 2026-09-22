@@ -88,6 +88,8 @@ try {
             -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `
             -ManifestRelative $ManifestRelative -ResultPrefix $ResultPrefix
         if ($Manifest.backcheck_analysis) {
+            $AnalysisMode = 'iterations'
+            if ($Manifest.backcheck_analysis -eq 'fourway') { $AnalysisMode = 'fourway' }
             $AnalysisLog = Join-Path $SplitResults 'backcheck-analysis.log'
             $PreviousPreference = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
@@ -98,7 +100,7 @@ try {
                     --entrypoint /opt/app/.pixi/envs/cuda/bin/python `
                     trackrad-algorithm-cotracker-algorithm `
                     /opt/app/experiments/analyze_frame_backcheck.py `
-                    --dataset /dataset --results /results --split $Split.Name 2>&1 |
+                    --dataset /dataset --results /results --split $Split.Name --mode $AnalysisMode 2>&1 |
                     Tee-Object -FilePath $AnalysisLog -Append | ForEach-Object { Write-Host $_ }
                 $AnalysisExit = $LASTEXITCODE
             } finally { $ErrorActionPreference = $PreviousPreference }
