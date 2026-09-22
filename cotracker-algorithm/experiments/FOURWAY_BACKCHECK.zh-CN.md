@@ -60,6 +60,21 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "$Repo\scripts\run
 
 如源码/数据变化，拒绝混用旧缓存，应指定新的ResultsRoot。不会覆盖上一轮实验，不生成临时可执行脚本，不关闭杀软，不修改系统执行策略；安全软件阻止时保留告警排查。
 
+## 若旧版本构建报 PyPI setuptools TLS/网络错误
+
+修复后的pixi.toml显式使用锁文件已有的setuptools 80.9.0，仅对本地cotracker包关闭构建隔离，避免构建setup.py时重复从PyPI获取setuptools。不关闭TLS校验，不改变模型参数。其他依赖的首次下载仍需要可用网络，不是完全离线安装。
+
+拉取修复后使用新的结果目录，避免旧frozen-run.json的源码指纹冲突，原失败日志/已有结果保留：
+
+```powershell
+$Repo = "C:\zhongliu\zhongliu-tuning"
+git -C $Repo pull --ff-only origin main
+$FixedResults = "$Repo\protocol-40-10-38\fourway-backcheck-buildfix"
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "$Repo\scripts\run_fourway_backcheck_resumable.ps1" -RepoRoot $Repo -ResultsRoot $FixedResults
+```
+
+以后续跑仍使用同一个buildfix目录。不要删除frozen-run.json来强行复用源码不同的缓存。参考[Pixi no-build-isolation文档](https://pixi.prefix.dev/latest/reference/pixi_manifest/#no-build-isolation)。
+
 ## 完成后发回（仅test-38目录）
 
 1. `fourway-score-summary.csv`：四种评分的相关性、AUROC和覆盖率。
