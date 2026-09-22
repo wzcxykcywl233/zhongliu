@@ -13,6 +13,7 @@ from experiments import (
     QUERY_STATE_EXPERIMENTS,
     FRAME_BACKCHECK_EXPERIMENTS,
     FOURWAY_BACKCHECK_EXPERIMENTS,
+    ROTATION_BACKCHECK_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -91,6 +92,7 @@ class ExperimentTests(unittest.TestCase):
             | set(QUERY_STATE_EXPERIMENTS)
             | set(FRAME_BACKCHECK_EXPERIMENTS)
             | set(FOURWAY_BACKCHECK_EXPERIMENTS)
+            | set(ROTATION_BACKCHECK_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -552,6 +554,7 @@ class ExperimentTests(unittest.TestCase):
                 *QUERY_STATE_EXPERIMENTS,
                 *FRAME_BACKCHECK_EXPERIMENTS,
                 *FOURWAY_BACKCHECK_EXPERIMENTS,
+                *ROTATION_BACKCHECK_EXPERIMENTS,
                 "points_1500",
                 "hierarchical_full_grid0_mamba",
                 "hierarchical_full_grid0_mamba_replacement",

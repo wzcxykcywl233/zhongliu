@@ -116,6 +116,9 @@ class FrameBackcheckTests(unittest.TestCase):
     def test_fourway_analysis_exports_and_rejects_changed_predictions(self):
         self.check_analysis('fourway')
 
+    def test_rotation_analysis_exports_and_rejects_changed_predictions(self):
+        self.check_analysis('rotation')
+
     def check_analysis(self, mode):
         # Exercise all filesystem/schema plumbing without requiring SimpleITK
         # locally. Actual MHA decoding remains the standard evaluation library.
@@ -137,11 +140,14 @@ class FrameBackcheckTests(unittest.TestCase):
                 label.touch()
                 arrays[str(label)] = np.ones((2,2,3))
             fourway = mode == 'fourway'
-            for n in ((2,) if fourway else (2,4,6)):
+            rotation = mode == 'rotation'
+            for n in ((2,) if fourway or rotation else (2,4,6)):
                 for enabled in (False,True):
                     profile = f'backcheck_i{n}' if enabled else f'backcheck_control_i{n}'
                     if fourway:
                         profile = 'fourway_backcheck_i2' if enabled else 'fourway_control_i2'
+                    if rotation:
+                        profile = 'rotation_history_i2' if enabled else 'rotation_control_i2'
                     folder = results/profile
                     folder.mkdir()
                     write_json(folder/'metrics.json', {'results':[{'case_id':c} for c in cases],
@@ -157,22 +163,32 @@ class FrameBackcheckTests(unittest.TestCase):
                                      center_history_four=.85,center_fixed_four=.75,
                                      radius_rejected_points=0,degenerate_rejected_points=0,
                                      bounds_rejected_points=0) for t in (1,2)]
+                        if rotation:
+                            for r in rows:
+                                r.update(patch_zero=.8,patch_aligned=.9,angle_accepted_points=5,angle_fallback_points=5,
+                                         crop_rejected_points=0,angle_0_points=5)
+                                for angle in (-20,-10,10,20): r[f'angle_{angle}_points']=0
                         write_json(job/'diagnostics.json', {'profile':profile,
-                            'config':{'n_iterations':n,'frame_backcheck':enabled,'frame_backcheck_fourway':fourway and enabled},
+                            'config':{'n_iterations':n,'frame_backcheck':enabled,'frame_backcheck_fourway':fourway and enabled,
+                                      'rotation_backcheck':rotation and enabled},
                             'prediction':{'output_file_sha256':analysis.sha256(image),'array_sha256':'equal'},
                             'frame_backcheck':rows})
             fake_sitk = SimpleNamespace(ReadImage=lambda p: arrays[p],GetArrayFromImage=lambda x:x)
             with patch.dict('sys.modules', {'SimpleITK':fake_sitk}):
                 analysis.analyze(dataset,results,'validation-10',mode)
                 prefix = 'fourway' if fourway else 'backcheck'
+                if rotation: prefix = 'rotation'
                 summary = analysis.read_json(results/f'{prefix}-analysis-summary.json')
-                self.assertEqual(summary['output_pairs'],10 if fourway else 30)
+                self.assertEqual(summary['output_pairs'],10 if fourway or rotation else 30)
                 self.assertEqual(summary['common_frames'],20)
                 performance_prefix = 'fourway-control-performance' if fourway else 'iteration-performance'
                 self.assertTrue((results/f'{performance_prefix}-validation-10.csv').exists())
                 if fourway:
                     self.assertTrue((results/'fourway-case-deltas-vs-center.csv').exists())
                 path = results/('fourway_backcheck_i2' if fourway else 'backcheck_i2')/'checkpoint'/'jobs'/cases[0]/'diagnostics.json'
+                if rotation:
+                    path=results/'rotation_history_i2'/'checkpoint'/'jobs'/cases[0]/'diagnostics.json'
+                    self.assertTrue((results/'rotation-case-deltas-vs-zero.csv').exists())
                 data = analysis.read_json(path)
                 data['prediction']['array_sha256'] = 'changed'
                 write_json(path,data)

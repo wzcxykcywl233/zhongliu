@@ -625,6 +625,7 @@ def hierarchical_forward_pass(
     query_state_inheritance: str = "none",
     frame_backcheck_rows=None,
     frame_backcheck_fourway=False,
+    rotation_backcheck=False,
     chain_trace=None,
     diagnostics: dict[str, int | float] | None = None,
     return_long_fusion_context: bool = False,
@@ -976,9 +977,21 @@ def hierarchical_forward_pass(
             except ImportError:
                 from frame_backcheck import score_frames, score_fourway_frames
             scorer = score_fourway_frames if frame_backcheck_fourway else score_frames
-            backcheck_pending[(level_start, level_end)] = scorer(
-                backcheck_capture['features'], level_queries, result.trajectories,
-                backcheck_capture['history'], level_start, model.stride)
+            if rotation_backcheck:
+                try:
+                    from .rotation_backcheck import score_rotation_frames
+                except ImportError:
+                    from rotation_backcheck import score_rotation_frames
+                backcheck_pending[(level_start, level_end)] = score_rotation_frames(
+                    model, video[:,level_start:level_end+1], backcheck_capture['features'],
+                    level_queries,result.trajectories,backcheck_capture['history'],level_start)
+                logger.info('Rotation backcheck segment %d..%d: %d frames, %d accepted point-frame angles',
+                            level_start,level_end,len(backcheck_pending[(level_start,level_end)]),
+                            sum(r['angle_accepted_points'] for r in backcheck_pending[(level_start,level_end)]))
+            else:
+                backcheck_pending[(level_start, level_end)] = scorer(
+                    backcheck_capture['features'], level_queries, result.trajectories,
+                    backcheck_capture['history'], level_start, model.stride)
         return result, captured
 
     def commit_query_memory(level_start, result, captured):

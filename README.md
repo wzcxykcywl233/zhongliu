@@ -246,3 +246,10 @@ supported points. Two inference profiles compute four scores without position,
 confidence, or memory feedback. Run `scripts/run_fourway_backcheck_resumable.ps1`;
 results are isolated under `protocol-40-10-38/fourway-backcheck`.
 See [四向回查实验说明](cotracker-algorithm/experiments/FOURWAY_BACKCHECK.zh-CN.md).
+# History-guided rotation alignment (diagnostic only)
+
+Run `scripts/run_rotation_backcheck_resumable.ps1` for fixed two-iteration
+control versus history-guided angle estimation and raw-patch re-encoding.
+No four-way expansion and no position/state feedback. Validation-10 and test-38
+outputs stay separate under `protocol-40-10-38/rotation-backcheck`.
+See [旋转对齐诊断说明](cotracker-algorithm/experiments/ROTATION_BACKCHECK.zh-CN.md).

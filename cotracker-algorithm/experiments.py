@@ -46,11 +46,14 @@ class ExperimentConfig:
     query_state_inheritance: str = "none"
     frame_backcheck: bool = False
     frame_backcheck_fourway: bool = False
+    rotation_backcheck: bool = False
     mask_appearance_radius: int = 0
     mask_appearance_min_gain: float = 0.01
     mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
+        if self.rotation_backcheck and (not self.frame_backcheck or self.frame_backcheck_fourway or self.n_iterations != 2):
+            raise ValueError('rotation observation requires backcheck, two iterations and no four-way probes')
         if self.frame_backcheck_fourway and (not self.frame_backcheck or self.n_iterations != 2):
             raise ValueError('four-way backcheck requires enabled observation and exactly 2 iterations')
         if self.frame_backcheck and (self.hierarchical_span <= 0 or self.support_grid_size != 0 or self.n_iterations < 2
@@ -425,6 +428,12 @@ FOURWAY_BACKCHECK_EXPERIMENTS = {
                                   frame_backcheck=True, frame_backcheck_fourway=True),
 }
 
+ROTATION_BACKCHECK_EXPERIMENTS = {
+    'rotation_control_i2': MEMORY_REFINEMENT_EXPERIMENTS['memory_control'],
+    'rotation_history_i2': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'],
+                                 frame_backcheck=True, rotation_backcheck=True),
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
@@ -434,6 +443,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
     **QUERY_STATE_EXPERIMENTS,
     **FRAME_BACKCHECK_EXPERIMENTS,
     **FOURWAY_BACKCHECK_EXPERIMENTS,
+    **ROTATION_BACKCHECK_EXPERIMENTS,
 }
 
 

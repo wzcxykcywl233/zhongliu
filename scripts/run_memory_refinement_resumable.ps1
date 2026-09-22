@@ -90,6 +90,7 @@ try {
         if ($Manifest.backcheck_analysis) {
             $AnalysisMode = 'iterations'
             if ($Manifest.backcheck_analysis -eq 'fourway') { $AnalysisMode = 'fourway' }
+            if ($Manifest.backcheck_analysis -eq 'rotation') { $AnalysisMode = 'rotation' }
             $AnalysisLog = Join-Path $SplitResults 'backcheck-analysis.log'
             $PreviousPreference = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
