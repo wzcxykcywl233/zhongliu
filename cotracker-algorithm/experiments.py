@@ -44,6 +44,7 @@ class ExperimentConfig:
     query_memory_diversity_weight: float = 0.25
     query_memory_refinement: str = "none"
     query_state_inheritance: str = "none"
+    query_state_decay_tau: float = 1.0
     frame_backcheck: bool = False
     frame_backcheck_fourway: bool = False
     rotation_backcheck: bool = False
@@ -52,6 +53,8 @@ class ExperimentConfig:
     mask_appearance_displacement_penalty: float = 0.01
 
     def __post_init__(self) -> None:
+        if not 0.0 < self.query_state_decay_tau <= 100.0:
+            raise ValueError('query_state_decay_tau must be in (0,100]')
         if self.rotation_backcheck and (not self.frame_backcheck or self.frame_backcheck_fourway or self.n_iterations != 2):
             raise ValueError('rotation observation requires backcheck, two iterations and no four-way probes')
         if self.frame_backcheck_fourway and (not self.frame_backcheck or self.n_iterations != 2):
@@ -434,7 +437,11 @@ ROTATION_BACKCHECK_EXPERIMENTS = {
                                  frame_backcheck=True, rotation_backcheck=True),
 }
 
+from parameter_retune import build_retune_catalog
+RETUNE_EXPERIMENTS, RETUNE_CATALOG = build_retune_catalog(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'])
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
+    **RETUNE_EXPERIMENTS,
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,
     **HIERARCHICAL_EXPERIMENTS,

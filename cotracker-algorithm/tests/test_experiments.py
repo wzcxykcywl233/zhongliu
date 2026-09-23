@@ -14,6 +14,7 @@ from experiments import (
     FRAME_BACKCHECK_EXPERIMENTS,
     FOURWAY_BACKCHECK_EXPERIMENTS,
     ROTATION_BACKCHECK_EXPERIMENTS,
+    RETUNE_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -93,6 +94,7 @@ class ExperimentTests(unittest.TestCase):
             | set(FRAME_BACKCHECK_EXPERIMENTS)
             | set(FOURWAY_BACKCHECK_EXPERIMENTS)
             | set(ROTATION_BACKCHECK_EXPERIMENTS)
+            | set(RETUNE_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -544,7 +546,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(reported_names & set(remaining_names))
         self.assertEqual(
             set(remaining_names),
-            set(EXPERIMENTS) - reported_names - excluded_names,
+            set(EXPERIMENTS) - reported_names - excluded_names - set(RETUNE_EXPERIMENTS),
         )
         self.assertEqual(remaining_names[-1], "support_grid_15")
         self.assertEqual(

@@ -7,7 +7,8 @@ param(
     [string]$ResultsRoot = "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\memory-refinement",
     [ValidateSet("all", "validation", "test")][string]$Stage = "all",
     [string]$ManifestRelative = 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json',
-    [string]$ResultPrefix = 'memory-refinement'
+    [string]$ResultPrefix = 'memory-refinement',
+    [string]$ReferenceImagesPath = ''
 )
 $ErrorActionPreference = "Stop"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -18,7 +19,7 @@ try {
     Start-Transcript -Path (Join-Path $ResultsRoot "queue.log") -Append | Out-Null
     $TranscriptStarted = $true
     $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
-    $ManifestPath = Join-Path $RepoRoot $ManifestRelative
+    $ManifestPath = if ([System.IO.Path]::IsPathRooted($ManifestRelative)) { $ManifestRelative } else { Join-Path $RepoRoot $ManifestRelative }
     $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $Profiles = @($Manifest.profiles)
     $Checkpoint = Join-Path $RepoRoot "cotracker-algorithm\torch\hub\checkpoints\scaled_offline.pth"
@@ -83,7 +84,8 @@ try {
         $SplitResults = Join-Path $ResultsRoot $Split.Name
         & (Join-Path $RepoRoot "scripts\run_hierarchical_followup_resumable.ps1") `
             -Repository $RepoRoot -Dataset $Split.Path -Results $SplitResults `
-            -Profiles $Profiles -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint
+            -Profiles $Profiles -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint `
+            -ReferenceImagesPath $ReferenceImagesPath
         & (Join-Path $RepoRoot "scripts\summarize_memory_refinement.ps1") `
             -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `
             -ManifestRelative $ManifestRelative -ResultPrefix $ResultPrefix

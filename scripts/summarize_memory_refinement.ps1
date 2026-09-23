@@ -8,7 +8,8 @@ param(
     [string]$ResultPrefix = 'memory-refinement'
 )
 $ErrorActionPreference = 'Stop'
-$Manifest = Get-Content (Join-Path $RepoRoot $ManifestRelative) -Raw | ConvertFrom-Json
+$ManifestPath = if ([System.IO.Path]::IsPathRooted($ManifestRelative)) { $ManifestRelative } else { Join-Path $RepoRoot $ManifestRelative }
+$Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
 $Profiles = @($Manifest.profiles)
 $MetricNames = [ordered]@{ DSC = 'dice_similarity_coefficient'; HD95 = 'hausdorff_distance_95'; MASD = 'surface_distance_average'; CD = 'center_distance'; D98 = 'relative_d98_dose' }
 $ReferenceCases = @{}
@@ -36,11 +37,13 @@ foreach ($Profile in $Profiles) {
         $DiagnosticPath = Join-Path $Results "$Profile\checkpoint\jobs\$CaseId\diagnostics.json"
         $Diagnostic = Get-Content -LiteralPath $DiagnosticPath -Raw | ConvertFrom-Json
         if ($Diagnostic.profile -ne $Profile) { throw "Wrong diagnostic profile: $DiagnosticPath" }
-        if ($Manifest.state_modes) {
+        if ($Manifest.state_modes -or $Manifest.audit_output_hashes) {
             $OutputHash = [string]$Diagnostic.prediction.array_sha256
             if (-not $OutputHash) { throw "Missing output hash: $Profile/$CaseId" }
             if ($Profile -eq $Manifest.reference) { $ReferenceHashes[$CaseId] = $OutputHash }
             $Row['OutputMatchesControl'] = $ReferenceHashes[$CaseId] -eq $OutputHash
+        }
+        if ($Manifest.state_modes) {
             $ExpectedMode = [string]$Manifest.state_modes.$Profile
             if ($Diagnostic.config.query_state_inheritance -ne $ExpectedMode) { throw "Wrong inheritance mode: $Profile/$CaseId" }
             foreach ($Key in @('state_inherited_segments','state_v_values','state_c_values','state_v_abs_logit_sum','state_c_abs_logit_sum')) {
@@ -50,7 +53,7 @@ foreach ($Profile in $Profiles) {
             if ($ExpectedMode -in @('none','v') -and $Diagnostic.mechanism.state_c_values -ne 0) { throw 'Unexpected C inheritance' }
         }
         foreach ($Property in $Diagnostic.mechanism.PSObject.Properties) {
-            if ($Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*' -or $Property.Name -like 'state_*') {
+            if ($Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*' -or $Property.Name -like 'state_*' -or $Property.Name -like 'runtime_*' -or $Property.Name -like 'occlusion_*') {
                 $DiagnosticRows += [PSCustomObject]@{ Split = $SplitName; Profile = $Profile; Case = $CaseId; Mechanism = $Property.Name; Value = $Property.Value }
             }
         }

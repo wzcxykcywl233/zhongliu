@@ -25,6 +25,16 @@ class StateFake(HierarchicalFakeCoTracker):
 
 
 class QueryStateTests(unittest.TestCase):
+    def test_decay_time_constant(self):
+        p=torch.tensor([[.8]])
+        default=resource_model.inherited_state_logits(p,11,'vc_decay',10)
+        same=resource_model.inherited_state_logits(p,11,'vc_decay',10,1.)
+        torch.testing.assert_close(default,same,rtol=0,atol=0)
+        fast=resource_model.inherited_state_logits(p,11,'vc_decay',10,.5)
+        slow=resource_model.inherited_state_logits(p,11,'vc_decay',10,2.)
+        self.assertTrue((fast[:,10] < default[:,10]).all())
+        self.assertTrue((slow[:,10] > default[:,10]).all())
+
     def run_fake(self, mode, merge=False):
         model = StateFake(hide_at=4. if merge else None)
         diagnostics = {}

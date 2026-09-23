@@ -47,6 +47,16 @@ def run_algorithm(
 
     # Step 1: Input format conversion ------------------------------------------------
     experiment_name, config = get_experiment_config()
+    retune_run = experiment_name.startswith(('rt_', 'rc_'))
+    if retune_run:
+        # Apply identically to all search arms; do not alter historical profiles.
+        import random
+        random.seed(20260923)
+        np.random.seed(20260923)
+        torch.manual_seed(20260923)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(20260923)
+            torch.cuda.reset_peak_memory_stats()
     diagnostics_enabled = os.environ.get("TRACKRAD_DIAGNOSTICS", "0") == "1"
     diagnostics: dict[str, object] | None = None
     numeric_diagnostics: dict[str, int | float] | None = None
@@ -161,6 +171,7 @@ def run_algorithm(
                 query_memory_mode=config.query_memory_mode,
                 query_memory_refinement=config.query_memory_refinement,
                 query_state_inheritance=config.query_state_inheritance,
+                query_state_decay_tau=config.query_state_decay_tau,
                 frame_backcheck_rows=backcheck_rows,
                 frame_backcheck_fourway=config.frame_backcheck_fourway,
                 rotation_backcheck=config.rotation_backcheck,
@@ -352,6 +363,10 @@ def run_algorithm(
             _chain_trace.mask("native_mask", prediction.transpose(2, 1, 0)[None])
 
         if diagnostics is not None and numeric_diagnostics is not None:
+            if retune_run:
+                numeric_diagnostics['runtime_seed'] = 20260923
+                numeric_diagnostics['runtime_peak_cuda_allocated_bytes'] = (
+                    int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0)
             if backcheck_rows is not None:
                 backcheck_rows.sort(key=lambda row: row['frame'])
                 if [row['frame'] for row in backcheck_rows] != list(range(1, T)):

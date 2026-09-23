@@ -10,6 +10,7 @@ param(
     ),
     [switch]$RequireDiagnostics,
     [switch]$FreezeImages,
+    [string]$ReferenceImagesPath = '',
     [string]$ModelCheckpoint = "",
     [string]$FusionGateCheckpoint = ""
 )
@@ -129,6 +130,14 @@ try {
             $ImageIdentity[$Image] = [string]$ImageId
         }
         $IdentityPath = Join-Path $Results 'frozen-images.json'
+        if ($ReferenceImagesPath) {
+            $ReferenceImages = Get-Content -LiteralPath $ReferenceImagesPath -Raw | ConvertFrom-Json
+            foreach ($Image in $ImageIdentity.Keys) {
+                if ($ReferenceImages.$Image -ne $ImageIdentity[$Image]) {
+                    throw "Image differs from the first search stage: $Image. Do not mix runtimes."
+                }
+            }
+        }
         if (Test-Path -LiteralPath $IdentityPath) {
             $PreviousImages = Get-Content -LiteralPath $IdentityPath -Raw | ConvertFrom-Json
             foreach ($Image in $ImageIdentity.Keys) {

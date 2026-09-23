@@ -174,7 +174,7 @@ def _add_support_grid(
     return torch.cat([queries, grid_points], dim=1), original_points
 
 
-def inherited_state_logits(probability, frames, mode, span):
+def inherited_state_logits(probability, frames, mode, span, decay_tau=1.0):
     """Boundary probabilities -> inference logits; decay towards neutral 0.5."""
     if probability.ndim != 2 or not bool(torch.isfinite(probability).all()):
         raise ValueError("boundary probability must be finite B,N")
@@ -185,7 +185,9 @@ def inherited_state_logits(probability, frames, mode, span):
     base = torch.logit(probability.detach().float().clamp(1e-4, 1 - 1e-4))
     offsets = torch.arange(frames, device=base.device).float()
     if mode == "vc_decay":
-        scale = torch.exp(-offsets / span)
+        if not 0 < decay_tau <= 100:
+            raise ValueError('invalid decay time constant')
+        scale = torch.exp(-offsets / (span * decay_tau))
     elif mode == "vc_query":
         scale = (offsets == 0).float()
     elif mode in {"v", "c", "vc"}:
@@ -623,6 +625,7 @@ def hierarchical_forward_pass(
     query_memory_diversity_weight: float = 0.25,
     query_memory_refinement: str = "none",
     query_state_inheritance: str = "none",
+    query_state_decay_tau: float = 1.0,
     frame_backcheck_rows=None,
     frame_backcheck_fourway=False,
     rotation_backcheck=False,
@@ -820,7 +823,7 @@ def hierarchical_forward_pass(
             for kind, probability in (("v", prior_v), ("c", prior_c)):
                 if query_state_inheritance in {"v", "c"} and kind != query_state_inheritance:
                     continue
-                initial = inherited_state_logits(probability, level_end - level_start + 1, query_state_inheritance, span)
+                initial = inherited_state_logits(probability, level_end - level_start + 1, query_state_inheritance, span, query_state_decay_tau)
                 field = "initial_visibility_logits" if kind == "v" else "initial_confidence_logits"
                 state_kwargs[field] = initial
                 _diagnostic_add(diagnostics, "state_" + kind + "_values", initial.numel())
