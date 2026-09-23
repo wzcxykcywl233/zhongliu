@@ -253,3 +253,14 @@ control versus history-guided angle estimation and raw-patch re-encoding.
 No four-way expansion and no position/state feedback. Validation-10 and test-38
 outputs stay separate under `protocol-40-10-38/rotation-backcheck`.
 See [旋转对齐诊断说明](cotracker-algorithm/experiments/ROTATION_BACKCHECK.zh-CN.md).
+
+# Best-mainline and VC-decay candidate diagnostics
+
+Run `scripts/diagnose_best_candidates.ps1` to analyze the existing
+`query-state-inheritance/test-38` outputs without training or rerunning inference.
+It compares official case metrics, time/segment-offset error patterns,
+ground-truth centroid-alignment counterfactuals, contour reconstruction losses,
+and worst-frame overlays. CPU-only, offline, frozen-runtime, case-resumable;
+source predictions are mounted read-only. Ground-truth probes are diagnostics,
+not deployable improvements or official performance numbers.
+See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments/BEST_CANDIDATE_DIAGNOSTICS.zh-CN.md).
