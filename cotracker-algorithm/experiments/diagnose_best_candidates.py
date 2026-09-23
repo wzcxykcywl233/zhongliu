@@ -3,6 +3,7 @@ import argparse
 import csv
 import hashlib
 import importlib.util
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,20 @@ import numpy as np
 PROFILES = ('pvc_control', 'pvc_vc_decay')
 METRICS = {'DSC': 'dice_similarity_coefficient', 'HD95': 'hausdorff_distance_95',
            'MASD': 'surface_distance_average', 'CD': 'center_distance', 'D98': 'relative_d98_dose'}
+
+
+def verify_helpers(runtime, reference):
+    """Check current reference compatibility, not unavailable historical image identity."""
+    hashes = {}
+    for name in ('reshape.py', 'seg_to_tap.py', 'tap_to_seg.py'):
+        def normalized(path):
+            return hashlib.sha256(path.read_text(encoding='utf-8-sig').encode('utf-8')).hexdigest()
+        actual = normalized(runtime / name)
+        expected = normalized(reference / name)
+        if actual != expected:
+            raise ValueError('Diagnostic reconstruction helper mismatch: ' + name)
+        hashes[name] = actual
+    return hashes
 
 
 def read(path):
@@ -304,6 +319,8 @@ def main():
     for name in ('dataset','previous','output'): parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--split',choices=('validation-10','test-38'),required=True)
     parser.add_argument('--image-id',required=True)
+    parser.add_argument('--source-image-id',required=True)
+    parser.add_argument('--reference-resources',type=Path,required=True)
     parser.add_argument('--resource-root',type=Path,default=Path('/opt/app/resources'))
     parser.add_argument('--sample-frames',type=int,default=12)
     args=parser.parse_args()
@@ -311,6 +328,14 @@ def main():
     # Keep numerical analysis bounded; no GPU, model load, training, or package install.
     import torch
     torch.set_num_threads(2)
+    source_identity = args.previous/'frozen-images.json'
+    if read(source_identity).get('trackrad-algorithm-cotracker-algorithm') != args.source_image_id:
+        raise ValueError('Prediction source image identity mismatch')
+    reference_helpers = verify_helpers(args.resource_root,args.reference_resources)
+    versions = {'python':sys.version}
+    for package in ('torch','numpy','scipy','scikit-image','SimpleITK','opencv-python','opencv-python-headless'):
+        try: versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError: versions[package] = None
     cases=sorted(p.name for p in args.dataset.iterdir() if p.is_dir())
     if len(cases)!=(38 if args.split=='test-38' else 10): raise ValueError('Unexpected dataset count')
     args.output.mkdir(parents=True,exist_ok=True)
@@ -327,7 +352,11 @@ def main():
         print('VERIFY INPUT '+case,flush=True)
         for key,path in files.items(): inputs[case+'/'+key]=sha(path)
     helpers={p.name:sha(p) for p in (args.resource_root/n for n in ('reshape.py','seg_to_tap.py','tap_to_seg.py'))}
-    frozen={'schema':1,'split':args.split,'image':args.image_id,'inputs':inputs,'helpers':helpers,
+    frozen={'schema':2,'split':args.split,'image':args.image_id,'inputs':inputs,'helpers':helpers,
+            'prediction_source_image':args.source_image_id,'runtime_override':args.image_id!=args.source_image_id,
+            'source_identity_sha256':sha(source_identity),'dependency_versions':versions,
+            'reference_helpers_normalized_sha256':reference_helpers,
+            'compatibility_note':'Helpers match current repository reference; unavailable historical image equivalence is not asserted.',
             'script':sha(Path(__file__)),'sample_frames':args.sample_frames,'seed':20260923}
     identity=args.output/'frozen-run.json'
     if identity.exists():

@@ -11,6 +11,18 @@ d=importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
 
 
 class DiagnosticsTest(unittest.TestCase):
+    def test_helper_compatibility(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime=Path(folder)/'runtime'; reference=Path(folder)/'reference'
+            runtime.mkdir(); reference.mkdir()
+            for name in ('reshape.py','seg_to_tap.py','tap_to_seg.py'):
+                (runtime/name).write_bytes(b'x = 1\r\n')
+                (reference/name).write_bytes(b'x = 1\n')
+            self.assertEqual(len(d.verify_helpers(runtime,reference)),3)
+            (runtime/'reshape.py').write_text('x = 2\n')
+            with self.assertRaisesRegex(ValueError,'helper mismatch'):
+                d.verify_helpers(runtime,reference)
+
     def test_shift_no_wrap(self):
         a=np.zeros((8,9),bool); a[0,0]=True
         self.assertFalse(d.shift_mask(a,-1,0).any())

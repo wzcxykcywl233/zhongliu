@@ -5,6 +5,7 @@ param(
     [string]$Dataset = '',
     [string]$PreviousResults = '',
     [string]$OutputRoot = '',
+    [string]$DiagnosticImage = '',
     [ValidateRange(1,10000)][int]$SampleFrames = 12
 )
 $ErrorActionPreference = 'Stop'
@@ -17,10 +18,24 @@ if (-not $OutputRoot) { $OutputRoot = Join-Path $RepoRoot 'protocol-40-10-38\bes
 $Output = Join-Path $OutputRoot $Split
 # Never build or silently replace the original runtime; analysis is CPU-only.
 $Identity = Get-Content -LiteralPath (Join-Path $PreviousResults 'frozen-images.json') -Raw | ConvertFrom-Json
-$Image = [string]$Identity.'trackrad-algorithm-cotracker-algorithm'
-if ($Image -notmatch '^sha256:[0-9a-f]{64}$') { throw 'No frozen inference image found' }
-& docker image inspect $Image *> $null
-if ($LASTEXITCODE -ne 0) { throw 'Original frozen image unavailable. Preserve results; do not substitute another image.' }
+$SourceImage = [string]$Identity.'trackrad-algorithm-cotracker-algorithm'
+if ($SourceImage -notmatch '^sha256:[0-9a-f]{64}$') { throw 'No frozen inference image found' }
+$Image = if ($DiagnosticImage) { $DiagnosticImage } else { $SourceImage }
+if ($Image -notmatch '^sha256:[0-9a-f]{64}$') { throw 'DiagnosticImage must be an immutable sha256 image ID' }
+$OldPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & docker info *> $null
+    $EngineStatus = $LASTEXITCODE
+    if ($EngineStatus -eq 0) {
+        & docker image inspect $Image *> $null
+        $ImageStatus = $LASTEXITCODE
+    }
+} finally { $ErrorActionPreference = $OldPreference }
+if ($EngineStatus -ne 0) { throw 'Docker engine unavailable. Start Docker Desktop and retry.' }
+if ($ImageStatus -ne 0) { throw 'Image unavailable. Specify an installed immutable image with -DiagnosticImage; no automatic substitution is performed.' }
+Write-Host "Prediction source image: $SourceImage"
+Write-Host "Diagnostic runtime image: $Image"
 $Dataset = (Resolve-Path -LiteralPath $Dataset).Path
 $PreviousResults = (Resolve-Path -LiteralPath $PreviousResults).Path
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
@@ -41,10 +56,12 @@ try {
             --mount "type=bind,source=$Dataset,target=/dataset,readonly" `
             --mount "type=bind,source=$PreviousResults,target=/previous,readonly" `
             --mount "type=bind,source=$RepoRoot\cotracker-algorithm\experiments,target=/diagnostic-source,readonly" `
+            --mount "type=bind,source=$RepoRoot\cotracker-algorithm\resources,target=/reference-resources,readonly" `
             --mount "type=bind,source=$Output,target=/diagnostic-output" `
             --entrypoint /opt/app/.pixi/envs/cuda/bin/python $Image `
             /diagnostic-source/diagnose_best_candidates.py --dataset /dataset --previous /previous `
-            --output /diagnostic-output --split $Split --sample-frames $SampleFrames --image-id $Image 2>&1 |
+            --output /diagnostic-output --split $Split --sample-frames $SampleFrames --image-id $Image `
+            --source-image-id $SourceImage --reference-resources /reference-resources 2>&1 |
             ForEach-Object {
                 $Line = $_.ToString()
                 Write-Host $Line
