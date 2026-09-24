@@ -6,14 +6,23 @@ param(
     [string]$ValidationDataset = 'C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_validation_10',
     [string]$TestDataset = 'C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_public_test_38',
     [ValidateSet('plan','validation','test')][string]$Stage = 'validation',
-    [string]$PlannerImage = 'python:3.11-slim'
+    [string]$PlannerImage = 'python:3.11-slim',
+    [string]$ReuseResultsRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+if ($ReuseResultsRoot) {
+    $ReuseResultsRoot = (Resolve-Path -LiteralPath $ReuseResultsRoot).Path.TrimEnd('\')
+    $NewRootPath = [IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
+    if ($NewRootPath -eq $ReuseResultsRoot -or $NewRootPath.StartsWith($ReuseResultsRoot+'\',[StringComparison]::OrdinalIgnoreCase) -or $ReuseResultsRoot.StartsWith($NewRootPath+'\',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Reuse requires separate, non-nested old and new result directories.'
+    }
+}
 New-Item -ItemType Directory -Force -Path $ResultsRoot | Out-Null
 $ResultsRoot = (Resolve-Path -LiteralPath $ResultsRoot).Path
 $QueueLock = [IO.File]::Open((Join-Path $ResultsRoot '.retune.lock'),'OpenOrCreate','ReadWrite','None')
 $TranscriptStarted = $false
+$SourceLock = $null
 function Invoke-Plan([string]$PlanStage) {
     $Prior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -28,6 +37,7 @@ function Invoke-Plan([string]$PlanStage) {
     if ($Status -ne 0) { throw "Planner failed ($Status). No subsequent stage was started." }
 }
 function Invoke-Stage([string]$Name,[string]$SplitStage) {
+    $Reuse = if ($Name -eq 'single') { $ReuseResultsRoot } else { '' }
     $ImageReference = ''
     if ($Name -ne 'single') {
         $ImageReference = Join-Path $ResultsRoot 'single\validation-10\frozen-images.json'
@@ -36,9 +46,13 @@ function Invoke-Stage([string]$Name,[string]$SplitStage) {
         -RepoRoot $RepoRoot -TrainDataset $TrainDataset -ValidationDataset $ValidationDataset `
         -TestDataset $TestDataset -ResultsRoot (Join-Path $ResultsRoot $Name) `
         -Stage $SplitStage -ManifestRelative (Join-Path $ResultsRoot "$Name.json") `
-        -ResultPrefix "retune-$Name" -ReferenceImagesPath $ImageReference
+        -ResultPrefix "retune-$Name" -ReferenceImagesPath $ImageReference `
+        -RetuneReuseRoot $Reuse -ReusePlannerImage $PlannerImage
 }
 try {
+    if ($ReuseResultsRoot) {
+        $SourceLock = [IO.File]::Open((Join-Path $ReuseResultsRoot '.retune.lock'),'Open','Read','None')
+    }
     Start-Transcript -Path (Join-Path $ResultsRoot 'queue.log') -Append | Out-Null
     $TranscriptStarted = $true
     Invoke-Plan 'single'
@@ -64,4 +78,5 @@ try {
 } finally {
     if ($TranscriptStarted) { Stop-Transcript | Out-Null }
     $QueueLock.Dispose()
+    if ($SourceLock) { $SourceLock.Dispose() }
 }

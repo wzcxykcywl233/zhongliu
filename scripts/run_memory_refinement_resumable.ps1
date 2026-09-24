@@ -8,7 +8,9 @@ param(
     [ValidateSet("all", "validation", "test")][string]$Stage = "all",
     [string]$ManifestRelative = 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json',
     [string]$ResultPrefix = 'memory-refinement',
-    [string]$ReferenceImagesPath = ''
+    [string]$ReferenceImagesPath = '',
+    [string]$RetuneReuseRoot = '',
+    [string]$ReusePlannerImage = 'python:3.11-slim'
 )
 $ErrorActionPreference = "Stop"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -72,6 +74,31 @@ try {
         Move-Item -LiteralPath "$FrozenPath.tmp" -Destination $FrozenPath
     }
     Write-Host "[$([DateTimeOffset]::Now.ToString('o'))] $ResultPrefix queue started: $Stage"
+    if ($RetuneReuseRoot) {
+        if ($Stage -ne 'validation' -or $ResultPrefix -ne 'retune-single') { throw 'Reuse only supports retune single validation.' }
+        $RetuneReuseRoot = (Resolve-Path -LiteralPath $RetuneReuseRoot).Path
+        $NewStageRoot = (Resolve-Path -LiteralPath $ResultsRoot).Path
+        $OldStageRoot = Join-Path $RetuneReuseRoot 'single'
+        if ($NewStageRoot -eq $OldStageRoot -or $NewStageRoot.StartsWith($RetuneReuseRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Use a separate new ResultsRoot; the old run must remain untouched.'
+        }
+        # Fresh controls first, before accepting any cached source predictions.
+        & (Join-Path $RepoRoot 'scripts\run_hierarchical_followup_resumable.ps1') `
+            -Repository $RepoRoot -Dataset $ValidationDataset -Results (Join-Path $ResultsRoot 'validation-10') `
+            -Profiles @('rt_control','rt_repeat','rt_decay') -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint
+        $PreviousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & docker run --rm --pull never --network none `
+                --mount "type=bind,source=$RepoRoot\cotracker-algorithm,target=/app,readonly" `
+                --mount "type=bind,source=$RetuneReuseRoot,target=/old,readonly" `
+                --mount "type=bind,source=$NewStageRoot,target=/new" `
+                --entrypoint python $ReusePlannerImage /app/experiments/reuse_retune_gridfix.py --old /old --new /new 2>&1 |
+                ForEach-Object { Write-Host $_ }
+            $ReuseExit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $PreviousPreference }
+        if ($ReuseExit -ne 0) { throw 'Reuse audit failed. Old results preserved; do not bypass the check.' }
+    }
     foreach ($Split in $SplitSpecs | Where-Object Name -ne 'train-40') {
         if ($Stage -eq 'validation' -and $Split.Name -ne 'validation-10') { continue }
         if ($Stage -eq 'test' -and $Split.Name -ne 'test-38') { continue }

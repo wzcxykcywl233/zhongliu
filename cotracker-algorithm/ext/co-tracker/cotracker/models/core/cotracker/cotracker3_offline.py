@@ -32,6 +32,7 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
         initial_visibility_logits=None,
         initial_confidence_logits=None,
         iteration_observer=None,
+        query_feature_memory_points=None,
     ):
         """Predict tracks
 
@@ -155,6 +156,11 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
                 if not 0.0 <= query_feature_weight <= 1.0:
                     raise ValueError("query_feature_weight must be in [0, 1]")
             if query_feature_memory is not None and query_feature_weight > 0:
+                memory_points = track_feat.shape[-2] if query_feature_memory_points is None else query_feature_memory_points
+                if not isinstance(memory_points, int) or not 0 < memory_points <= track_feat.shape[-2]:
+                    raise ValueError('invalid query feature memory point count')
+                current_track = track_feat if query_feature_memory_points is None else track_feat[..., :memory_points, :]
+                current_support = track_feat_support if query_feature_memory_points is None else track_feat_support[..., :memory_points, :]
                 original_track_feat = query_feature_memory[0][i].to(
                     device=track_feat.device,
                     dtype=track_feat.dtype,
@@ -163,23 +169,28 @@ class CoTrackerThreeOffline(CoTrackerThreeBase):
                     device=track_feat_support.device,
                     dtype=track_feat_support.dtype,
                 )
-                if original_track_feat.shape != track_feat.shape:
+                if original_track_feat.shape != current_track.shape:
                     raise ValueError("track feature memory shape does not match current queries")
-                if original_support_feat.shape != track_feat_support.shape:
+                if original_support_feat.shape != current_support.shape:
                     raise ValueError("support feature memory shape does not match current queries")
                 if feature_observer is not None:
                     feature_observer(i, "memory_track", original_track_feat)
                     feature_observer(i, "memory_support", original_support_feat)
-                track_feat = F.normalize(
+                mixed_track = F.normalize(
                     query_feature_weight * original_track_feat
-                    + (1.0 - query_feature_weight) * track_feat,
+                    + (1.0 - query_feature_weight) * current_track,
                     dim=-1,
                 )
-                track_feat_support = F.normalize(
+                mixed_support = F.normalize(
                     query_feature_weight * original_support_feat
-                    + (1.0 - query_feature_weight) * track_feat_support,
+                    + (1.0 - query_feature_weight) * current_support,
                     dim=-1,
                 )
+                if query_feature_memory_points is None:
+                    track_feat, track_feat_support = mixed_track, mixed_support
+                else:
+                    track_feat = torch.cat((mixed_track, track_feat[..., memory_points:, :]), dim=-2)
+                    track_feat_support = torch.cat((mixed_support, track_feat_support[..., memory_points:, :]), dim=-2)
             if feature_observer is not None:
                 feature_observer(i, "current_track", extracted_track_features[-1])
                 feature_observer(i, "current_support", extracted_support_features[-1])

@@ -1,5 +1,7 @@
 # 当前最优方法的分阶段参数复调
 
+已在首轮遇到 `rt_grid_1/2/3` 记忆维度错误的运行，请使用[网格修复与旧结果审计复用入口](PARAMETER_RETUNE_GRIDFIX.zh-CN.md)，不要直接改旧目录的冻结指纹。
+
 ## 目的与边界
 
 固定 CoTracker 权重和当前重建方法，重新检查加入动态查询记忆后的参数搭配。不训练、不使用软标签或辅助教师、不加入 Mamba。主对照 `rt_control` 是 `hierarchical_full_grid0_iterations2_memory_topk_diverse` 的别名；`rt_repeat` 为完全同配置复跑；`rt_decay` 为增加现有 V/C 衰减继承的候选对照。

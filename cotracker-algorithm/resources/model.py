@@ -267,6 +267,12 @@ def _run_single_clip(
             query_feature_memory.support,
         )
         model_kwargs["query_feature_weight"] = query_feature_weight
+        if queries.shape[1] != original_N:
+            # Auxiliary grid locations are re-created each segment, not tracked
+            # anatomical identities. Only boundary points inherit memory.
+            model_kwargs['query_feature_memory_points'] = original_N
+            if callable(query_feature_memory):
+                model_kwargs['query_feature_memory'] = lambda feature: query_feature_memory(feature[..., :original_N, :])
     if return_query_feature_memory:
         model_kwargs["return_query_feature_memory"] = True
     if return_frame_features:
@@ -308,6 +314,11 @@ def _run_single_clip(
     if return_query_feature_memory:
         raw_memory = out[extra_index]
         memory = QueryFeatureMemory(tuple(raw_memory[0]), tuple(raw_memory[1]))
+        if queries.shape[1] != original_N:
+            memory = QueryFeatureMemory(
+                tuple(t[..., :original_N, :] for t in memory.track),
+                tuple(t[..., :original_N, :] for t in memory.support),
+            )
         extra_index += 1
 
     frame_features = None
