@@ -9,6 +9,7 @@ param(
     [string]$ManifestRelative = 'cotracker-algorithm\experiments\memory-refinement-40-10-38.json',
     [string]$ResultPrefix = 'memory-refinement',
     [string]$ReferenceImagesPath = '',
+    [switch]$UsePinnedImages,
     [string]$RetuneReuseRoot = '',
     [string]$ReusePlannerImage = 'python:3.11-slim'
 )
@@ -85,7 +86,7 @@ try {
         # Fresh controls first, before accepting any cached source predictions.
         & (Join-Path $RepoRoot 'scripts\run_hierarchical_followup_resumable.ps1') `
             -Repository $RepoRoot -Dataset $ValidationDataset -Results (Join-Path $ResultsRoot 'validation-10') `
-            -Profiles @('rt_control','rt_repeat','rt_decay') -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint
+            -Profiles @('rt_control','rt_repeat','rt_decay') -RequireDiagnostics -FreezeImages -UsePinnedImages:$UsePinnedImages -ModelCheckpoint $Checkpoint
         $PreviousPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
@@ -111,7 +112,7 @@ try {
         $SplitResults = Join-Path $ResultsRoot $Split.Name
         & (Join-Path $RepoRoot "scripts\run_hierarchical_followup_resumable.ps1") `
             -Repository $RepoRoot -Dataset $Split.Path -Results $SplitResults `
-            -Profiles $Profiles -RequireDiagnostics -FreezeImages -ModelCheckpoint $Checkpoint `
+            -Profiles $Profiles -RequireDiagnostics -FreezeImages -UsePinnedImages:$UsePinnedImages -ModelCheckpoint $Checkpoint `
             -ReferenceImagesPath $ReferenceImagesPath
         & (Join-Path $RepoRoot "scripts\summarize_memory_refinement.ps1") `
             -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `

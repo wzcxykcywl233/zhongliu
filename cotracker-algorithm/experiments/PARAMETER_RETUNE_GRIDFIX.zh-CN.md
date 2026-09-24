@@ -19,7 +19,9 @@ git -C C:\zhongliu\zhongliu-tuning pull --ff-only origin main
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\zhongliu\zhongliu-tuning\scripts\repair_parameter_retune_grid.ps1
 ```
 
-旧目录 `parameter-retune` 不修改。新目录为同级 `parameter-retune-gridfix`。不需要删除frozen-run或frozen-images，不应修改旧指纹。
+旧目录 `parameter-retune` 不修改。修复后的默认结果目录为同级 `parameter-retune-gridfix-v2`。之前失败的 `parameter-retune-gridfix` 也原样保留，不删除或改写任何 frozen-run / frozen-images 指纹。由于运行脚本已更新，不能在旧结果目录里混用新旧源码。
+
+同一轮运行首次构建后会记录算法与评价镜像的不可变 ID；后续恢复、复核及测试直接使用这些 ID，不再重复构建同名镜像。如果记录的镜像已被清理，队列会停止，绝不自动改用当前标签。
 
 流程：
 
@@ -39,4 +41,4 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\zhongliu\zhongl
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:\zhongliu\zhongliu-tuning\scripts\repair_parameter_retune_grid.ps1 -Stage test
 ```
 
-最终报告只使用 `parameter-retune-gridfix\final\test-38`。全新实验可直接使用常规入口并指定全新ResultsRoot，不传ReuseResultsRoot。
+最终报告只使用 `parameter-retune-gridfix-v2\final\test-38`。全新实验可直接使用常规入口并指定全新ResultsRoot，不传ReuseResultsRoot。

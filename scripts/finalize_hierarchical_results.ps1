@@ -1,4 +1,5 @@
 param(
+    [string]$EvaluationImage = 'trackrad-evaluation',
     [string]$Repository = "C:\zhongliu\zhongliu-tuning",
     [string]$Dataset = "C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_training_data",
     [string]$Results = "C:\zhongliu\zhongliu-tuning\hierarchical-results",
@@ -99,7 +100,7 @@ foreach ($Profile in $Profiles) {
         "--mount", "type=bind,source=$Checkpoint,target=/input,readonly",
         "--mount", "type=bind,source=$Evaluation,target=/output",
         "--mount", "type=bind,source=$Dataset,target=/opt/app/ground_truth,readonly",
-        "trackrad-evaluation"
+        $EvaluationImage
     )
 
     & docker @DockerArguments 2>&1 | Tee-Object -FilePath $LogPath -Append

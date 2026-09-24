@@ -46,7 +46,7 @@ function Invoke-Stage([string]$Name,[string]$SplitStage) {
         -RepoRoot $RepoRoot -TrainDataset $TrainDataset -ValidationDataset $ValidationDataset `
         -TestDataset $TestDataset -ResultsRoot (Join-Path $ResultsRoot $Name) `
         -Stage $SplitStage -ManifestRelative (Join-Path $ResultsRoot "$Name.json") `
-        -ResultPrefix "retune-$Name" -ReferenceImagesPath $ImageReference `
+        -ResultPrefix "retune-$Name" -ReferenceImagesPath $ImageReference -UsePinnedImages `
         -RetuneReuseRoot $Reuse -ReusePlannerImage $PlannerImage
 }
 try {

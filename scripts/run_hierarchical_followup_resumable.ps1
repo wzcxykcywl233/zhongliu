@@ -10,6 +10,7 @@ param(
     ),
     [switch]$RequireDiagnostics,
     [switch]$FreezeImages,
+    [switch]$UsePinnedImages,
     [string]$ReferenceImagesPath = '',
     [string]$ModelCheckpoint = "",
     [string]$FusionGateCheckpoint = ""
@@ -103,33 +104,51 @@ try {
         Write-RunMessage "Fusion gate checkpoint: $FusionGateCheckpoint"
     }
 
-    $BuildLog = Join-Path $Results "build.log"
-    $Status = Invoke-DockerLogged -LogPath $BuildLog -Arguments @(
-        "build", $AlgorithmDir,
-        "--platform=linux/amd64",
-        "--tag", "trackrad-algorithm-cotracker-algorithm"
-    )
-    if ($Status -ne 0) {
-        throw "Algorithm image build failed with exit code $Status"
+    $IdentityPath = Join-Path $Results 'frozen-images.json'
+    $PinnedIdentity = $null
+    if ($UsePinnedImages -and $FreezeImages) {
+        if (Test-Path -LiteralPath $IdentityPath -PathType Leaf) {
+            $PinnedIdentity = Get-Content -LiteralPath $IdentityPath -Raw | ConvertFrom-Json
+            Write-RunMessage "Using this stage's frozen image IDs; skipping Docker builds"
+        } elseif ($ReferenceImagesPath) {
+            $PinnedIdentity = Get-Content -LiteralPath $ReferenceImagesPath -Raw | ConvertFrom-Json
+            Write-RunMessage "Using first stage's frozen image IDs; skipping Docker builds"
+        }
     }
+    if ($null -eq $PinnedIdentity) {
+        $BuildLog = Join-Path $Results "build.log"
+        $Status = Invoke-DockerLogged -LogPath $BuildLog -Arguments @(
+            "build", $AlgorithmDir,
+            "--platform=linux/amd64",
+            "--tag", "trackrad-algorithm-cotracker-algorithm"
+        )
+        if ($Status -ne 0) {
+            throw "Algorithm image build failed with exit code $Status"
+        }
 
-    $Status = Invoke-DockerLogged -LogPath $BuildLog -Arguments @(
-        "build", $EvaluationDir,
-        "--platform=linux/amd64",
-        "--tag", "trackrad-evaluation"
-    )
-    if ($Status -ne 0) {
-        throw "Evaluation image build failed with exit code $Status"
+        $Status = Invoke-DockerLogged -LogPath $BuildLog -Arguments @(
+            "build", $EvaluationDir,
+            "--platform=linux/amd64",
+            "--tag", "trackrad-evaluation"
+        )
+        if ($Status -ne 0) {
+            throw "Evaluation image build failed with exit code $Status"
+        }
     }
 
     if ($FreezeImages) {
         $ImageIdentity = [ordered]@{}
         foreach ($Image in @('trackrad-algorithm-cotracker-algorithm', 'trackrad-evaluation')) {
-            $ImageId = & docker image inspect --format '{{.Id}}' $Image
-            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect image: $Image" }
+            $ExpectedId = if ($null -ne $PinnedIdentity) { [string]$PinnedIdentity.$Image } else { '' }
+            if ($null -ne $PinnedIdentity -and $ExpectedId -notmatch '^sha256:[0-9a-f]{64}$') {
+                throw "Invalid frozen image ID: $Image"
+            }
+            $InspectTarget = if ($ExpectedId) { $ExpectedId } else { $Image }
+            $ImageId = & docker image inspect --format '{{.Id}}' $InspectTarget
+            if ($LASTEXITCODE -ne 0) { throw "Frozen image unavailable: $InspectTarget. Keep existing results; do not substitute a tag." }
+            if ($ExpectedId -and [string]$ImageId -ne $ExpectedId) { throw "Frozen image identity mismatch: $Image" }
             $ImageIdentity[$Image] = [string]$ImageId
         }
-        $IdentityPath = Join-Path $Results 'frozen-images.json'
         if ($ReferenceImagesPath) {
             $ReferenceImages = Get-Content -LiteralPath $ReferenceImagesPath -Raw | ConvertFrom-Json
             foreach ($Image in $ImageIdentity.Keys) {
@@ -149,6 +168,8 @@ try {
             Write-AtomicJson -Path $IdentityPath -Value $ImageIdentity
         }
     }
+    $AlgorithmImage = if ($UsePinnedImages -and $FreezeImages) { $ImageIdentity['trackrad-algorithm-cotracker-algorithm'] } else { 'trackrad-algorithm-cotracker-algorithm' }
+    $EvaluationImage = if ($UsePinnedImages -and $FreezeImages) { $ImageIdentity['trackrad-evaluation'] } else { 'trackrad-evaluation' }
 
     $Failures = New-Object System.Collections.Generic.List[string]
     $CaseFolders = @(Get-ChildItem -LiteralPath $Dataset -Directory | Sort-Object Name)
@@ -220,7 +241,7 @@ try {
                     "--mount", "type=bind,source=$($CaseFolder.FullName)\images\${CaseId}_frames.mha,target=/input/images/mri-linacs/${CaseId}_frames.mha,readonly",
                     "--mount", "type=bind,source=$($CaseFolder.FullName)\targets\${CaseId}_first_label.mha,target=/input/images/mri-linac-target/target.mha,readonly",
                     "--mount", "type=bind,source=$AttemptOutput,target=/output",
-                    "trackrad-algorithm-cotracker-algorithm"
+                    $AlgorithmImage
                 )
                 if (-not [string]::IsNullOrWhiteSpace($ModelCheckpoint)) {
                     $ImageIndex = $DockerArguments.Count - 1
@@ -346,7 +367,7 @@ try {
                 Write-RunMessage "Checkpoint committed: $Profile/$CaseId"
             }
 
-            & $Finalizer -Repository $Repository -Dataset $Dataset -Results $Results -Profiles @($Profile)
+            & $Finalizer -Repository $Repository -Dataset $Dataset -Results $Results -Profiles @($Profile) -EvaluationImage $EvaluationImage
             Write-RunMessage "Metrics committed: $Profile"
         }
         catch {
