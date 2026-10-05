@@ -270,4 +270,6 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 
 250点收益的后续[跟踪/重建拆分实验](cotracker-algorithm/experiments/POINT_DECOUPLING.zh-CN.md)入口为 `scripts/run_point_decoupling_resumable.ps1`：固定五组，包含稠密轨迹缓存重建、相同查询位置的稀疏跟踪及原生250点采样对照。默认 `-Stage validation`，审计通过后显式 `-Stage test` 运行38例，输出独立保存在 `protocol-40-10-38/point-decoupling-v1`。
 
+[CoTracker主干加深实验](cotracker-algorithm/experiments/BACKBONE_GROWTH.zh-CN.md)入口为 `scripts/run_backbone_growth_resumable.ps1`，包含同条件微调base（25.39M）、时间6层（30.70M）、时间/空间各6组（46.67M）及未微调参照。新增残差层零输出初始化并保留预训练三层顺序；默认三种子、每组1000步，结构化审计教师/病例/查询/视频配对。依次运行 `-Stage smoke`、`-Stage validation`、`-Stage test`，最终38例结果在 `protocol-40-10-38/backbone-growth-v1/test-38`。
+
 详细范围、对照、筛选规则和输出位置见 [参数复调协议](cotracker-algorithm/experiments/PARAMETER_RETUNE.zh-CN.md)。

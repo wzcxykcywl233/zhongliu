@@ -105,6 +105,11 @@ def run_algorithm(
         mamba_replace_time_attention=config.mamba_replace_time_attention,
         mamba_refiner=config.mamba_refiner,
     )
+    if diagnostics is not None:
+        diagnostics['model'] = {
+            'backbone_architecture': getattr(model, 'backbone_architecture', 'base'),
+            'parameters': sum(parameter.numel() for parameter in model.parameters()) if hasattr(model, 'parameters') else 0,
+        }
 
     # Step 3: Create BatchData object -------------------------------------------------
     video = frames_tensor

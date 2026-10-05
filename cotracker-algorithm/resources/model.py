@@ -104,6 +104,14 @@ def setup_model(
         if checkpoint is not None:
             with open(checkpoint, "rb") as f:
                 state_dict = torch.load(f, map_location="cpu")
+                architecture = state_dict.get('backbone_architecture', 'base') if isinstance(state_dict, dict) else 'base'
+                if architecture != 'base':
+                    if mamba_refiner or mamba_replace_time_attention:
+                        raise ValueError('backbone growth cannot be combined with Mamba checkpoints')
+                    from cotracker.models.core.cotracker.backbone_growth import grow_backbone
+                    grow_backbone(model, architecture)
+                else:
+                    model.backbone_architecture = 'base'
                 # Handle different checkpoint formats
                 if isinstance(state_dict, dict):
                     if "model_state_dict" in state_dict:

@@ -490,6 +490,7 @@ class EfficientUpdateFormer(nn.Module):
         _, N, _, _ = tokens.shape
         j = 0
         layers = []
+        space_schedule = getattr(self, 'space_layer_schedule', None)
         for i in range(len(self.time_blocks)):
             time_tokens = tokens.contiguous().view(B * N, T, -1)  # B N T C -> (B N) T C
             time_tokens = self.time_blocks[i](time_tokens)
@@ -498,8 +499,11 @@ class EfficientUpdateFormer(nn.Module):
             if (
                 add_space_attn
                 and hasattr(self, "space_virtual_blocks")
-                and (i % (len(self.time_blocks) // len(self.space_virtual_blocks)) == 0)
+                and ((i in space_schedule) if space_schedule is not None else
+                     (i % (len(self.time_blocks) // len(self.space_virtual_blocks)) == 0))
             ):
+                if space_schedule is not None:
+                    j = space_schedule[i]
                 space_tokens = (
                     tokens.permute(0, 2, 1, 3).contiguous().view(B * T, N, -1)
                 )  # B N T C -> (B T) N C

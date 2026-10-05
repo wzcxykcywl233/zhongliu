@@ -57,6 +57,9 @@ from cotracker.models.core.cotracker.mamba_time import (
     attach_trajectory_mamba_refiner,
     replace_updateformer_time_attention,
 )
+from cotracker.models.core.cotracker.backbone_growth import (
+    ARCHITECTURES, warm_start, save_json, repair_audit_tail,
+)
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -614,6 +617,16 @@ class Lite(LightningLite):
         else:
             raise ValueError(f"Model {args.model_name} doesn't exist")
 
+        architecture_report = None
+        if args.backbone_growth_study:
+            if not args.restore_ckpt:
+                raise ValueError('backbone growth requires the original pretrained checkpoint')
+            architecture_report = warm_start(model, self.load(args.restore_ckpt), args.backbone_architecture)
+            save_json(Path(args.ckpt_path) / 'initialization-report.json', architecture_report)
+            repair_audit_tail(Path(args.ckpt_path) / 'paired-steps.jsonl')
+            logging.info('Backbone initialization proof: %s', architecture_report)
+            args.restore_ckpt = None
+
         if args.mamba_time_replacement or args.mamba_trajectory_refiner:
             if not args.restore_ckpt:
                 raise ValueError(
@@ -767,8 +780,26 @@ class Lite(LightningLite):
             and not "final" in f
         ]
         if len(folder_ckpts) > 0:
-            ckpt_path = sorted(folder_ckpts)[-1]
-            ckpt = self.load(os.path.join(args.ckpt_path, ckpt_path))
+            if args.backbone_growth_study:
+                ckpt = None
+                for candidate in sorted(folder_ckpts, reverse=True):
+                    try:
+                        loaded = self.load(os.path.join(args.ckpt_path, candidate))
+                        required = {'model','optimizer','scheduler','total_steps','epoch','next_batch','teacher_sampler','rng_state','experiment'}
+                        if not required.issubset(loaded):
+                            raise ValueError('incomplete training state')
+                    except Exception as error:
+                        logging.warning('Checkpoint unreadable; trying older checkpoint: %s (%s)', candidate, error)
+                        continue
+                    if loaded.get('backbone_architecture') != args.backbone_architecture:
+                        raise ValueError('resume checkpoint has a different backbone architecture')
+                    ckpt_path, ckpt = candidate, loaded
+                    break
+                if ckpt is None:
+                    raise ValueError('no valid training checkpoint remains; preserve results and inspect the failure')
+            else:
+                ckpt_path = sorted(folder_ckpts)[-1]
+                ckpt = self.load(os.path.join(args.ckpt_path, ckpt_path))
             logging.info(f"Loading checkpoint {ckpt_path}")
             if "model" in ckpt:
                 model.load_state_dict(ckpt["model"])
@@ -835,8 +866,14 @@ class Lite(LightningLite):
                 "rng_state": _capture_rng_state(),
                 "experiment": vars(args),
             }
+            if args.backbone_growth_study:
+                save_dict['backbone_architecture'] = args.backbone_architecture
+                save_dict['architecture_report'] = architecture_report
             logging.info(f"Saving atomic checkpoint {save_path}")
             self.save(save_dict, temporary_path)
+            if args.backbone_growth_study:
+                with open(temporary_path, 'rb') as stream:
+                    os.fsync(stream.fileno())
             os.replace(temporary_path, save_path)
             latest_path = Path(args.ckpt_path) / "latest_checkpoint.txt"
             latest_tmp = latest_path.with_suffix(".tmp")
@@ -910,6 +947,8 @@ class Lite(LightningLite):
                 for k, v in output.items():
                     if "loss" in v:
                         loss += v["loss"]
+                if args.backbone_growth_study and not bool(torch.isfinite(loss).all()):
+                    raise ValueError('non-finite loss; the last complete training checkpoint is preserved')
 
                 if self.global_rank == 0:
                     for k, v in output.items():
@@ -1002,6 +1041,22 @@ class Lite(LightningLite):
                 scaler.update()
                 total_steps += 1
                 if self.global_rank == 0:
+                    if args.backbone_growth_study:
+                        teacher_info = output['teacher_sampling']
+                        video_array = batch.video.detach().cpu().contiguous().numpy()
+                        record = {
+                            'step': total_steps - 1, 'architecture': args.backbone_architecture,
+                            'case_names': teacher_info['case_names'],
+                            'queries_sha256': teacher_info['queries_sha256'],
+                            'video_sha256': hashlib.sha256(video_array.tobytes()).hexdigest(),
+                            'primary_index': teacher_info['primary_index'],
+                            'auxiliary_index': teacher_info['auxiliary_index'],
+                            'loss': float(loss.detach().cpu()),
+                        }
+                        with open(Path(args.ckpt_path) / 'paired-steps.jsonl', 'a', encoding='utf-8') as stream:
+                            stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + '\n')
+                            stream.flush()
+                            os.fsync(stream.fileno())
                     if (
                         args.save_every_n_steps > 0
                         and total_steps % args.save_every_n_steps == 0
@@ -1033,7 +1088,14 @@ class Lite(LightningLite):
             print("FINISHED TRAINING")
 
             PATH = f"{args.ckpt_path}/{args.model_name}_final.pth"
-            torch.save(_unwrap_model(model).state_dict(), PATH)
+            final = _unwrap_model(model).state_dict()
+            if args.backbone_growth_study:
+                final = {'model': final, 'backbone_architecture': args.backbone_architecture,
+                         'architecture_report': architecture_report, 'total_steps': total_steps}
+            torch.save(final, PATH + '.tmp')
+            with open(PATH + '.tmp', 'rb') as stream:
+                os.fsync(stream.fileno())
+            os.replace(PATH + '.tmp', PATH)
             if not args.skip_evaluation:
                 run_test_eval(
                     evaluator, model, final_dataloaders, logger.writer, total_steps
@@ -1050,6 +1112,9 @@ if __name__ == "__main__":
         "--experiment_name", default="random_tutor", help="audit label stored in logs"
     )
     parser.add_argument("--restore_ckpt", help="path to restore a checkpoint")
+    parser.add_argument('--backbone_architecture', choices=ARCHITECTURES, default='base')
+    parser.add_argument('--backbone_growth_study', action='store_true',
+                        help='paired full-model depth study with checked pretrained initialization and structured step audits')
     parser.add_argument("--ckpt_path", help="path to save checkpoints")
     parser.add_argument(
         "--batch_size", type=int, default=4, help="batch size used during training."
@@ -1412,6 +1477,15 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.backbone_architecture != 'base' and not args.backbone_growth_study:
+        parser.error('non-base backbone requires --backbone_growth_study')
+    if args.backbone_growth_study and (
+        args.model_name != 'cotracker_three' or not args.offline_model or
+        args.mamba_time_replacement or args.mamba_trajectory_refiner or
+        args.confidence_head_only or args.confidence_updateformer or
+        args.auxiliary_teacher_weight != 0 or args.trackrad_mask_supervision_weight != 0 or
+        args.confidence_target_mode != 'hard' or args.paired_step_seed is None):
+        parser.error('backbone growth requires offline CoTracker3, paired steps and the unchanged single-teacher training recipe')
     if not 0.0 <= args.auxiliary_teacher_weight <= 0.5:
         parser.error("--auxiliary_teacher_weight must be in [0, 0.5]")
     if args.same_teacher_control and args.auxiliary_teacher_weight == 0.0:
