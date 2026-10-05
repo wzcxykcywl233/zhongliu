@@ -52,6 +52,26 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhong
 
 ## 权重、恢复与日志
 
+### GitHub不可达时复用已有训练环境
+
+若构建停在下载Pixi，而本机已有之前训练成功的 `trackrad-cotracker-gt-mask-training:latest` 镜像，可给所有阶段指定 `-TrainingRuntimeImage`。脚本先检查本地镜像、固定其ID，再只复制当前仓库的训练代码和实验工具；不执行Pixi安装或依赖解析，也不使用旧实验的模型权重或训练配置。导入实际训练入口后记录Python/PyTorch/Lightning版本到runtime-check.json；GPU是否能训练由独立冒烟确认。
+
+更新源码后必须使用新目录，不修改原backbone-growth-v1的冻结记录。以下每个阶段各是一整行命令：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_backbone_growth_resumable.ps1" -Stage smoke -TrainingRuntimeImage "trackrad-cotracker-gt-mask-training:latest" -ResultsRoot "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\backbone-growth-offline-v1"
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_backbone_growth_resumable.ps1" -Stage validation -TrainingRuntimeImage "trackrad-cotracker-gt-mask-training:latest" -ResultsRoot "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\backbone-growth-offline-v1"
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_backbone_growth_resumable.ps1" -Stage test -TrainingRuntimeImage "trackrad-cotracker-gt-mask-training:latest" -ResultsRoot "C:\zhongliu\zhongliu-tuning\protocol-40-10-38\backbone-growth-offline-v1"
+```
+
+该选项只避免训练环境安装，首次验证仍需构建推理/评价镜像。若指定镜像已清理，脚本会明确停止，需先查看docker image ls选择实际存在且有training环境的镜像，不会静默下载替代品。各组必须使用同一固定环境；复用本身不改变三组架构、40/10/38数据协议或训练超参数。
+
 需要已有training-checkpoints下的scaled_offline.pth、baseline_online.pth、baseline_offline.pth、cotracker2v1.pth。首次构建后固定训练、推理和评价镜像ID；冻结源码、权重、数据、种子及训练参数。训练和验证使用同样的推理镜像，测试沿用验证镜像。
 
 每25步以及每个epoch保存完整优化器、学习率调度器、随机状态、教师采样器和数据位置，保留最近3个断点。保存到临时文件并同步，再原子提交；若最新断点因断电不可读取，会尝试更旧的完整断点。所有断点损坏则停止。最终模型也原子保存，包含架构元数据；推理加载时重建对应结构并严格检查全部权重形状。审计还检查新增层的输出投影是否真正离开零初始化。

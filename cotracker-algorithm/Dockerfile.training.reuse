@@ -1,0 +1,12 @@
+ARG TRAINING_BASE_IMAGE
+FROM ${TRAINING_BASE_IMAGE}
+
+# Reuse the installed environment, not the old experiment's Python code.
+# No installer, package resolution, apt or network request is needed here.
+USER user
+WORKDIR /opt/app
+ENV PYTHONUNBUFFERED=1
+ENV TORCH_HOME=/opt/app/torch/
+COPY --chown=user:user ext/co-tracker/ /opt/app/ext/co-tracker/
+COPY --chown=user:user experiments/ /opt/app/experiments/
+ENTRYPOINT ["/opt/app/.pixi/envs/training/bin/python", "/opt/app/ext/co-tracker/train_on_real_data.py"]

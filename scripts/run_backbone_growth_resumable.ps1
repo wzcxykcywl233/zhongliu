@@ -8,7 +8,8 @@ param(
     [ValidateSet('smoke','train','validation','test')][string]$Stage = 'validation',
     [ValidateRange(1,100000)][int]$NumSteps = 1000,
     [ValidateRange(1,10000)][int]$SaveEverySteps = 25,
-    [string]$Seeds = '0,1,2'
+    [string]$Seeds = '0,1,2',
+    [string]$TrainingRuntimeImage = ''
 )
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
@@ -60,7 +61,7 @@ $Source = @(
     }
 )
 $Protocol = [ordered]@{
-    Schema=1; Source=$Source; Weights=$Weights; Dataset=$Data
+    Schema=2; Source=$Source; Weights=$Weights; Dataset=$Data; TrainingRuntimeImage=$TrainingRuntimeImage
     Architectures=$Architectures; Seeds=$SeedValues; Steps=$NumSteps; SaveEverySteps=$SaveEverySteps
     SequenceLength=10; Trajectories=384; TrainIterations=4; LearningRate=0.00005
     AuxiliaryTeacherWeight=0; MaskLossWeight=0; ConfidenceTarget='hard'; InferenceProfile=$InferenceProfile
@@ -110,13 +111,36 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Pinned training image unavailable; preserve results.' }
     } else {
         if ($Stage -eq 'test') { throw 'Run training and validation first.' }
-        Invoke-DockerLogged -Log (Join-Path $ResultsRoot 'build.log') -Arguments @(
-            'build','--progress=plain','--platform=linux/amd64','--file', (Join-Path $RepoRoot 'cotracker-algorithm\Dockerfile.training'),
-            '--tag','trackrad-cotracker-backbone-growth', (Join-Path $RepoRoot 'cotracker-algorithm'))
+        $Dockerfile = Join-Path $RepoRoot 'cotracker-algorithm\Dockerfile.training'
+        $BuildExtra = @()
+        $RuntimeId = ''
+        if ($TrainingRuntimeImage) {
+            # Inspect only local images; never pull or silently substitute a tag.
+            $Previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $RuntimeId = [string](& docker image inspect --format '{{.Id}}' $TrainingRuntimeImage 2>$null)
+                $InspectStatus = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $Previous }
+            if ($InspectStatus -ne 0 -or $RuntimeId -notmatch '^sha256:[0-9a-f]{64}$') {
+                throw "Local training runtime unavailable: $TrainingRuntimeImage. Run docker image ls; no download was attempted."
+            }
+            # A Dockerfile FROM needs a local named reference rather than a bare
+            # image ID. Make a dedicated alias for the inspected immutable ID.
+            $RuntimeAlias = 'trackrad-backbone-runtime-base:' + $RuntimeId.Substring(7,12)
+            Invoke-DockerLogged -Log (Join-Path $ResultsRoot 'build.log') -Arguments @('tag',$RuntimeId,$RuntimeAlias)
+            $Dockerfile = Join-Path $RepoRoot 'cotracker-algorithm\Dockerfile.training.reuse'
+            $BuildExtra = @('--pull=false','--network=none','--build-arg',"TRAINING_BASE_IMAGE=$RuntimeAlias")
+            Write-Host "Reusing local training environment: $RuntimeId; copying CURRENT training code; no Pixi install"
+        }
+        Invoke-DockerLogged -Log (Join-Path $ResultsRoot 'build.log') -Arguments (@(
+            'build','--progress=plain','--platform=linux/amd64','--file', $Dockerfile,
+            '--tag','trackrad-cotracker-backbone-growth') + $BuildExtra + @((Join-Path $RepoRoot 'cotracker-algorithm')))
         $TrainingImageId = [string](& docker image inspect --format '{{.Id}}' trackrad-cotracker-backbone-growth)
         if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect training image.' }
-        Write-AtomicJson $ImagePath @{Id=$TrainingImageId}
+        Write-AtomicJson $ImagePath @{Id=$TrainingImageId; ReusedRuntimeId=$RuntimeId; RequestedRuntime=$TrainingRuntimeImage}
     }
+    Invoke-TrainingTool 'check_backbone_runtime.py' @('--output','/study/runtime-check.json')
     $TrainingRoot = Join-Path $ResultsRoot 'train'
     if ($Stage -ne 'test') {
         foreach ($Seed in $SeedValues) {
