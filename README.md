@@ -268,4 +268,6 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 
 入口：`scripts/run_parameter_retune_resumable.ps1`。默认仅运行验证搜索：63组首轮、最多20组交互组合、冻结入围复核；之后显式 `-Stage test` 才启动38例正式评估。断电重跑同一命令续接，不进行训练。
 
+250点收益的后续[跟踪/重建拆分实验](cotracker-algorithm/experiments/POINT_DECOUPLING.zh-CN.md)入口为 `scripts/run_point_decoupling_resumable.ps1`：固定五组，包含稠密轨迹缓存重建、相同查询位置的稀疏跟踪及原生250点采样对照。默认 `-Stage validation`，审计通过后显式 `-Stage test` 运行38例，输出独立保存在 `protocol-40-10-38/point-decoupling-v1`。
+
 详细范围、对照、筛选规则和输出位置见 [参数复调协议](cotracker-algorithm/experiments/PARAMETER_RETUNE.zh-CN.md)。

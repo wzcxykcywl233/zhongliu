@@ -51,8 +51,14 @@ class ExperimentConfig:
     mask_appearance_radius: int = 0
     mask_appearance_min_gain: float = 0.01
     mask_appearance_displacement_penalty: float = 0.01
+    query_parent_points: int = 0
+    reconstruction_points: int = 0
 
     def __post_init__(self) -> None:
+        if self.query_parent_points and self.query_parent_points < self.border_points:
+            raise ValueError('query_parent_points must cover all tracking queries')
+        if self.reconstruction_points and not 3 <= self.reconstruction_points <= self.border_points:
+            raise ValueError('reconstruction_points must be within [3, border_points]')
         if not 0.0 < self.query_state_decay_tau <= 100.0:
             raise ValueError('query_state_decay_tau must be in (0,100]')
         if self.rotation_backcheck and (not self.frame_backcheck or self.frame_backcheck_fourway or self.n_iterations != 2):
@@ -440,7 +446,16 @@ ROTATION_BACKCHECK_EXPERIMENTS = {
 from parameter_retune import build_retune_catalog
 RETUNE_EXPERIMENTS, RETUNE_CATALOG = build_retune_catalog(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'])
 
+POINT_DECOUPLING_EXPERIMENTS = {
+    'pd_dense': MEMORY_REFINEMENT_EXPERIMENTS['memory_control'],
+    'pd_dense_repeat': MEMORY_REFINEMENT_EXPERIMENTS['memory_control'],
+    'pd_dense_thin': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], reconstruction_points=250),
+    'pd_sparse_matched': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], border_points=250, query_parent_points=1000),
+    'pd_sparse_native': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], border_points=250),
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
+    **POINT_DECOUPLING_EXPERIMENTS,
     **RETUNE_EXPERIMENTS,
     **SINGLE_POINT_EXPERIMENTS,
     **COMBINATION_EXPERIMENTS,

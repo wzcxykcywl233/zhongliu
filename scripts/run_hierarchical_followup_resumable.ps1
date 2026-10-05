@@ -11,6 +11,7 @@ param(
     [switch]$RequireDiagnostics,
     [switch]$FreezeImages,
     [switch]$UsePinnedImages,
+    [switch]$PointDecoupling,
     [string]$ReferenceImagesPath = '',
     [string]$ModelCheckpoint = "",
     [string]$FusionGateCheckpoint = ""
@@ -84,6 +85,10 @@ catch {
 
 try {
     Write-RunMessage "Follow-up experiments started"
+    if ($PointDecoupling -and (-not $RequireDiagnostics -or -not $FreezeImages -or -not $UsePinnedImages -or
+        @($Profiles | Where-Object { $_ -notin @('pd_dense','pd_dense_repeat','pd_dense_thin','pd_sparse_matched','pd_sparse_native') }).Count -gt 0)) {
+        throw 'Point decoupling requires the registered profiles, diagnostics and pinned images.'
+    }
     Write-RunMessage "Profiles: $($Profiles -join ', ')"
     Write-RunMessage "Dataset: $Dataset"
     Write-RunMessage "Results: $Results"
@@ -204,6 +209,10 @@ try {
                     ((Get-Item -LiteralPath $CompletedOutput).Length -gt 0) -and
                     ((-not $RequireDiagnostics) -or
                         (Test-Path -LiteralPath $CompletedDiagnostics -PathType Leaf))
+                if ($PointDecoupling -and $Profile -ne 'pd_dense_thin') {
+                    $ValidCheckpoint = $ValidCheckpoint -and
+                        (Test-Path -LiteralPath (Join-Path $CompletedDir 'output\point-cache.npz') -PathType Leaf)
+                }
 
                 if ($ValidCheckpoint) {
                     Write-RunMessage "Checkpoint hit: $Profile/$CaseId"
@@ -273,6 +282,29 @@ try {
                         $DockerArguments[$ImageIndex]
                     )
                 }
+                if ($PointDecoupling) {
+                    $ImageIndex = $DockerArguments.Count - 1
+                    if ($Profile -eq 'pd_dense_thin') {
+                        $SourceJob = Join-Path $Results "pd_dense\checkpoint\jobs\$CaseId"
+                        $SourceOutput = Join-Path $SourceJob 'output'
+                        if (-not (Test-Path -LiteralPath (Join-Path $SourceJob '.complete')) -or
+                            -not (Test-Path -LiteralPath (Join-Path $SourceOutput 'point-cache.npz'))) {
+                            throw "Dense trajectory checkpoint unavailable: $CaseId"
+                        }
+                        $DockerArguments = @(
+                            $DockerArguments[0..($ImageIndex - 1)] +
+                            @('--mount', "type=bind,source=$SourceOutput,target=/point-source,readonly",
+                              '--entrypoint', '/opt/app/.pixi/envs/cuda/bin/python') +
+                            @($DockerArguments[$ImageIndex], '/opt/app/experiments/replay_point_decoupling.py')
+                        )
+                    } else {
+                        $DockerArguments = @(
+                            $DockerArguments[0..($ImageIndex - 1)] +
+                            @('--env', 'TRACKRAD_POINT_CACHE_PATH=/output/point-cache.npz') +
+                            @($DockerArguments[$ImageIndex])
+                        )
+                    }
+                }
                 $Status = Invoke-DockerLogged `
                     -LogPath $CaseLog `
                     -Arguments $DockerArguments
@@ -305,6 +337,10 @@ try {
                     }
                     if ($Diagnostic.profile -ne $Profile) {
                         throw "$Profile/$CaseId reported profile '$($Diagnostic.profile)'"
+                    }
+                    if ($PointDecoupling -and $Profile -ne 'pd_dense_thin' -and
+                        -not (Test-Path -LiteralPath (Join-Path $AttemptOutput 'point-cache.npz'))) {
+                        throw "$Profile/$CaseId did not save the trajectory cache"
                     }
                     if ($Profile -like "*_gate") {
                         $GateFrames = $Diagnostic.mechanism.long_fusion_gate_frames

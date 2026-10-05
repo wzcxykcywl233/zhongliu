@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "reference": "pd_dense",
+  "reference_alias_of": "hierarchical_full_grid0_iterations2_memory_topk_diverse",
+  "training": false,
+  "audit_output_hashes": true,
+  "splits": {"train": 40, "validation": 10, "test": 38},
+  "profiles": ["pd_dense", "pd_dense_repeat", "pd_dense_thin", "pd_sparse_matched", "pd_sparse_native"],
+  "matched_pairs": [
+    {"effect": "reconstruction_density", "reference": "pd_dense", "candidate": "pd_dense_thin"},
+    {"effect": "tracking_density", "reference": "pd_dense_thin", "candidate": "pd_sparse_matched"},
+    {"effect": "query_sampling_grid", "reference": "pd_sparse_matched", "candidate": "pd_sparse_native"},
+    {"effect": "historical_total", "reference": "pd_dense", "candidate": "pd_sparse_native"}
+  ],
+  "seed": 20260923,
+  "evaluation": "Five arms fixed before new runs. Explicit validation then test. Public test-38 is already inspected; this is exploratory mechanism analysis."
+}

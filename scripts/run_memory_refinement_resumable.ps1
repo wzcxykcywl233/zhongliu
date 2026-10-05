@@ -10,6 +10,7 @@ param(
     [string]$ResultPrefix = 'memory-refinement',
     [string]$ReferenceImagesPath = '',
     [switch]$UsePinnedImages,
+    [switch]$PointDecoupling,
     [string]$RetuneReuseRoot = '',
     [string]$ReusePlannerImage = 'python:3.11-slim'
 )
@@ -113,7 +114,7 @@ try {
         & (Join-Path $RepoRoot "scripts\run_hierarchical_followup_resumable.ps1") `
             -Repository $RepoRoot -Dataset $Split.Path -Results $SplitResults `
             -Profiles $Profiles -RequireDiagnostics -FreezeImages -UsePinnedImages:$UsePinnedImages -ModelCheckpoint $Checkpoint `
-            -ReferenceImagesPath $ReferenceImagesPath
+            -ReferenceImagesPath $ReferenceImagesPath -PointDecoupling:$PointDecoupling
         & (Join-Path $RepoRoot "scripts\summarize_memory_refinement.ps1") `
             -RepoRoot $RepoRoot -Results $SplitResults -ExpectedCases $Split.Count -SplitName $Split.Name `
             -ManifestRelative $ManifestRelative -ResultPrefix $ResultPrefix

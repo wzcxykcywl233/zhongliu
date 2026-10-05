@@ -47,7 +47,10 @@ def run_algorithm(
 
     # Step 1: Input format conversion ------------------------------------------------
     experiment_name, config = get_experiment_config()
-    retune_run = experiment_name.startswith(('rt_', 'rc_'))
+    point_decoupling_run = experiment_name.startswith('pd_')
+    if experiment_name == 'pd_dense_thin':
+        raise ValueError('pd_dense_thin requires checked cache replay; use the point-decoupling queue')
+    retune_run = experiment_name.startswith(('rt_', 'rc_')) or point_decoupling_run
     if retune_run:
         # Apply identically to all search arms; do not alter historical profiles.
         import random
@@ -58,6 +61,8 @@ def run_algorithm(
             torch.cuda.manual_seed_all(20260923)
             torch.cuda.reset_peak_memory_stats()
     diagnostics_enabled = os.environ.get("TRACKRAD_DIAGNOSTICS", "0") == "1"
+    if point_decoupling_run and (not os.environ.get('TRACKRAD_POINT_CACHE_PATH') or not diagnostics_enabled):
+        raise ValueError('point-decoupling profiles require cache output and diagnostics')
     diagnostics: dict[str, object] | None = None
     numeric_diagnostics: dict[str, int | float] | None = None
     if diagnostics_enabled:
@@ -123,10 +128,14 @@ def run_algorithm(
         )
 
         # extract points from query mask
-        queries = resources.convert_mask_to_points(
+        parent_queries = resources.convert_mask_to_points(
             seg_mask=query,
-            n_border_points=config.border_points,
+            n_border_points=config.query_parent_points or config.border_points,
         )
+        queries = parent_queries
+        if config.query_parent_points:
+            from point_decoupling import subset_indices
+            queries = parent_queries.index_select(1, subset_indices(config.query_parent_points, config.border_points, parent_queries.device))
         if _chain_trace is not None:
             _chain_trace.tensor("initial_queries", queries)
         if numeric_diagnostics is not None:
@@ -305,6 +314,20 @@ def run_algorithm(
                 numeric_diagnostics["confidence_below_threshold"] = int(
                     (tracking.confidence < config.confidence_threshold).sum().item()
                 )
+
+        if point_decoupling_run:
+            from point_decoupling import save_cache
+            cache_path = os.environ.get('TRACKRAD_POINT_CACHE_PATH')
+            if validity is not None:
+                raise ValueError('point-decoupling expects the unfiltered contour')
+            cache_metadata = save_cache(
+                cache_path, profile=experiment_name, config=asdict(config),
+                queries=queries, parent_queries=parent_queries, trajectories=trajectories,
+                frames=frames, target=target, model_shape=COTRACKER_SHAPE, native_shape=ORIGINAL_SHAPE,
+            )
+            diagnostics['point_decoupling'] = cache_metadata
+            numeric_diagnostics['point_tracking_count'] = int(queries.shape[1])
+            numeric_diagnostics['point_reconstruction_count'] = int(queries.shape[1])
 
         prediction = resources.convert_point_trajectory_to_mask_sequence(
             trajectories,
