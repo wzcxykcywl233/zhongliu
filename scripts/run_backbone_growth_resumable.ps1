@@ -5,14 +5,24 @@ param(
     [string]$TrainDataset = 'C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_train_40',
     [string]$ValidationDataset = 'C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_validation_10',
     [string]$TestDataset = 'C:\zhongliu\trackrad2025-main\dataset\trackrad2025_labeled_public_test_38',
-    [ValidateSet('smoke','train','validation','test')][string]$Stage = 'validation',
+    [ValidateSet('smoke','recover','train','validation','test')][string]$Stage = 'validation',
     [ValidateRange(1,100000)][int]$NumSteps = 1000,
     [ValidateRange(1,10000)][int]$SaveEverySteps = 25,
     [string]$Seeds = '0,1,2',
-    [string]$TrainingRuntimeImage = ''
+    [string]$TrainingRuntimeImage = '',
+    [string]$RecoverFrom = ''
 )
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+if ($Stage -eq 'recover' -and -not $RecoverFrom) { throw 'Recover stage requires RecoverFrom.' }
+if ($RecoverFrom) {
+    if ($Stage -eq 'smoke') { throw 'Smoke is a separate test; do not import completed training into it.' }
+    $RecoverFrom = (Resolve-Path -LiteralPath $RecoverFrom).Path
+    $NewPath = [IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
+    $OldPath = $RecoverFrom.TrimEnd('\')
+    if ($NewPath -eq $OldPath -or $NewPath.StartsWith($OldPath+'\',[StringComparison]::OrdinalIgnoreCase) -or
+        $OldPath.StartsWith($NewPath+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Recovery requires a separate sibling ResultsRoot.' }
+}
 $Architectures = @('base','time6','space_time6')
 $InferenceProfile = 'hierarchical_full_grid0_iterations2_memory_topk_diverse'
 if ($Seeds -notmatch '^\d+(,\d+)*$') { throw 'Seeds must be comma-separated nonnegative integers.' }
@@ -61,7 +71,7 @@ $Source = @(
     }
 )
 $Protocol = [ordered]@{
-    Schema=2; Source=$Source; Weights=$Weights; Dataset=$Data; TrainingRuntimeImage=$TrainingRuntimeImage
+    Schema=3; Source=$Source; Weights=$Weights; Dataset=$Data; TrainingRuntimeImage=$TrainingRuntimeImage; RecoverySource=$RecoverFrom
     Architectures=$Architectures; Seeds=$SeedValues; Steps=$NumSteps; SaveEverySteps=$SaveEverySteps
     SequenceLength=10; Trajectories=384; TrainIterations=4; LearningRate=0.00005
     AuxiliaryTeacherWeight=0; MaskLossWeight=0; ConfidenceTarget='hard'; InferenceProfile=$InferenceProfile
@@ -114,16 +124,21 @@ try {
         $Dockerfile = Join-Path $RepoRoot 'cotracker-algorithm\Dockerfile.training'
         $BuildExtra = @()
         $RuntimeId = ''
-        if ($TrainingRuntimeImage) {
+        $RuntimeReference = $TrainingRuntimeImage
+        if ($RecoverFrom) {
+            $RuntimeReference = [string](Get-Content -LiteralPath (Join-Path $RecoverFrom 'training-image.json') -Raw | ConvertFrom-Json).Id
+            if ($RuntimeReference -notmatch '^sha256:[0-9a-f]{64}$') { throw 'Original study has no valid pinned training image.' }
+        }
+        if ($RuntimeReference) {
             # Inspect only local images; never pull or silently substitute a tag.
             $Previous = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             try {
-                $RuntimeId = [string](& docker image inspect --format '{{.Id}}' $TrainingRuntimeImage 2>$null)
+                $RuntimeId = [string](& docker image inspect --format '{{.Id}}' $RuntimeReference 2>$null)
                 $InspectStatus = $LASTEXITCODE
             } finally { $ErrorActionPreference = $Previous }
             if ($InspectStatus -ne 0 -or $RuntimeId -notmatch '^sha256:[0-9a-f]{64}$') {
-                throw "Local training runtime unavailable: $TrainingRuntimeImage. Run docker image ls; no download was attempted."
+                throw "Local training runtime unavailable: $RuntimeReference. Run docker image ls; no download was attempted."
             }
             # A Dockerfile FROM needs a local named reference rather than a bare
             # image ID. Make a dedicated alias for the inspected immutable ID.
@@ -141,6 +156,21 @@ try {
         Write-AtomicJson $ImagePath @{Id=$TrainingImageId; ReusedRuntimeId=$RuntimeId; RequestedRuntime=$TrainingRuntimeImage}
     }
     Invoke-TrainingTool 'check_backbone_runtime.py' @('--output','/study/runtime-check.json')
+    if ($RecoverFrom) {
+        Write-Host 'Auditing ALL original steps; importing only compatible, paired completed arms into the NEW directory'
+        Invoke-DockerLogged -Log (Join-Path $ResultsRoot 'recovery.log') -Arguments @(
+            'run','--rm','--pull','never','--network','none',
+            '--mount',"type=bind,source=$RecoverFrom,target=/prior,readonly",
+            '--mount',"type=bind,source=$RepoRoot,target=/source,readonly",
+            '--mount',"type=bind,source=$ResultsRoot,target=/study",
+            '--entrypoint','/opt/app/.pixi/envs/training/bin/python',
+            $TrainingImageId,'/opt/app/experiments/recover_backbone_growth.py',
+            '--old','/prior','--new','/study','--source','/source')
+    }
+    if ($Stage -eq 'recover') {
+        Write-Host "Recovery plan and verified imports complete: $ResultsRoot\recovery-plan.json; no GPU training in this stage"
+        return
+    }
     $TrainingRoot = Join-Path $ResultsRoot 'train'
     if ($Stage -ne 'test') {
         foreach ($Seed in $SeedValues) {

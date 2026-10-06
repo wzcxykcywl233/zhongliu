@@ -52,6 +52,34 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhong
 
 ## 权重、恢复与日志
 
+### 修复已发生的中途重启配对失败
+
+2026-10-06发现旧队列在seed_0/space_time6第125步恢复后由B_012换到A_023，视频哈希也发生变化。Lightning/Fabric 1.9.4会在数据迭代器中使用内部_num_iter_calls覆盖DistributedSampler的epoch，仅恢复模型、优化器、随机状态及epoch/next_batch不足以保持病例顺序。修复在每轮迭代前对齐迭代器计数、采样器及数据集轮次，仅对本主干研究启用，不改变不中断时的顺序。
+
+不要清除重复记录或在旧目录强行继续。修复入口将旧目录以只读方式挂载，新目录为backbone-growth-resumefix-v1。先执行纯CPU审计/导入：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_backbone_growth_resume.ps1" -Stage recover
+```
+
+它检查已知旧版本到本次仅恢复逻辑修复的源码兼容性、原数据/权重/训练协议及同一依赖环境，逐组检查全部步骤、重复记录、预期病例/教师顺序、初始化证明、严格模型加载和新增层更新。每种子至少两组的全部输入签名一致才形成复用参照，其他组重新训练；发现更多异常不会静默放行。通过组只复制最终权重、步骤证据和初始化证明，原配置另存为reused-run-config.json，原来源和哈希另存为reused-training-source.json。
+
+recovery-plan.json记录全部接受/拒绝组及原文件校验值。若当前仅seed_0/space_time6受影响，计划将复用8组、重训1组；以远程全量审计为准，不根据一条记录预先保证8组都能复用。旧环境使用原training-image.json的不可变ID，不用最新标签替代。无清晰配对参照、数据/权重或数值逻辑变化、原镜像不可用均停止。
+
+检查计划后，继续选择性重训及10例验证：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_backbone_growth_resume.ps1" -Stage validation
+```
+
+验证完成后：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_backbone_growth_resume.ps1" -Stage test
+```
+
+后续重启重跑相同修复入口命令。不要再次更新仓库，否则仍会触发源码冻结保护。重训失败组从原始预训练权重重新开始，不继承已改变训练顺序的最终模型。全部组在新目录重新严格审计通过才进入验证/测试。新的验证/测试性能会统一在新推理镜像下重新计算，不复制旧正式指标。
+
 ### GitHub不可达时复用已有训练环境
 
 若构建停在下载Pixi，而本机已有之前训练成功的 `trackrad-cotracker-gt-mask-training:latest` 镜像，可给所有阶段指定 `-TrainingRuntimeImage`。脚本先检查本地镜像、固定其ID，再只复制当前仓库的训练代码和实验工具；不执行Pixi安装或依赖解析，也不使用旧实验的模型权重或训练配置。导入实际训练入口后记录Python/PyTorch/Lightning版本到runtime-check.json；GPU是否能训练由独立冒烟确认。

@@ -60,6 +60,7 @@ from cotracker.models.core.cotracker.mamba_time import (
 from cotracker.models.core.cotracker.backbone_growth import (
     ARCHITECTURES, warm_start, save_json, repair_audit_tail,
 )
+from cotracker.utils.resumable_loader import set_resumable_loader_epoch
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -915,6 +916,8 @@ class Lite(LightningLite):
             g.manual_seed(args.seed + epoch)
             if hasattr(train_dataset, "set_epoch"):
                 train_dataset.set_epoch(epoch)
+            if args.backbone_growth_study:
+                set_resumable_loader_epoch(train_loader, epoch)
             for i_batch, batch in enumerate(tqdm(train_loader)):
                 if epoch == resume_epoch and i_batch < resume_batch:
                     continue
