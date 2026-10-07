@@ -148,6 +148,7 @@ def attach_sidecar_verified(model, kind):
         generator = torch.Generator().manual_seed(20261008)
         video = torch.rand(1, 3, 3, 64, 64, generator=generator) * 255
         queries = torch.tensor([[[0.,16.,16.], [1.,32.,32.], [0.,48.,48.]]])
+        original_hash = tensor_hash(model.state_dict())
         with torch.no_grad():
             original = tuple(x.clone() for x in model(video=video, queries=queries, iters=2)[:3])
             for parameter in model.parameters():
@@ -155,16 +156,35 @@ def attach_sidecar_verified(model, kind):
             before = tuple(x.clone() for x in model(video=video, queries=queries, iters=2)[:3])
             report = attach_sidecar(model, kind)
             after = model(video=video, queries=queries, iters=2)[:3]
-        freeze_differences = [float((a-b).abs().max()) for a,b in zip(original,before)]
-        if any(d > limit for d,limit in zip(freeze_differences,(1e-4,1e-6,1e-6))):
-            raise ValueError('unexpected numerical change from freezing base: ' + str(freeze_differences))
-        report['freeze_transition_max_abs_difference'] = freeze_differences
-        differences = [float((a-b).abs().max()) for a,b in zip(before,after)]
-        if any(differences):
-            raise ValueError('sidecar zero initialization changed model outputs: ' + str(differences))
-        report['initialization_outputs_exact'] = True
-        report['initialization_max_abs_difference'] = differences
+        if report['base_tensor_sha256'] != original_hash or tensor_hash(model.state_dict()) != original_hash:
+            raise ValueError('initialization changed pretrained tensors')
+        report.update(validate_initialization_outputs(original, before, after))
         return report
     finally:
         model.train(mode)
         torch.set_num_threads(threads)
+
+
+def validate_initialization_outputs(original, frozen, attached):
+    """Freeze-flag transition is diagnostic; the actual matched control is exact.
+
+    requires_grad can alter backend dispatch even under no_grad. Original and
+    frozen are different computation configurations, not the sidecar contrast.
+    Do not turn a machine-specific floating-point tolerance into a model gate.
+    """
+    if len(original) != 3 or len(frozen) != 3 or len(attached) != 3:
+        raise ValueError('expected P/V/C initialization outputs')
+    for a,b,c in zip(original, frozen, attached):
+        if a.shape != b.shape or b.shape != c.shape:
+            raise ValueError('initialization output shapes changed')
+        if any(not bool(torch.isfinite(x).all()) for x in (a,b,c)):
+            raise ValueError('nonfinite initialization outputs')
+    transition = [float((a-b).abs().max()) for a,b in zip(original,frozen)]
+    differences = [float((a-b).abs().max()) for a,b in zip(frozen,attached)]
+    if not all(torch.equal(a,b) for a,b in zip(frozen,attached)):
+        raise ValueError('sidecar zero initialization changed model outputs: ' + str(differences))
+    return {'freeze_transition_max_abs_difference': transition,
+            'freeze_transition_is_diagnostic': True,
+            'initialization_reference': 'frozen-pretrained',
+            'initialization_outputs_exact': True,
+            'initialization_max_abs_difference': differences}

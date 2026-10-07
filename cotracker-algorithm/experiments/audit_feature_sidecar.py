@@ -26,6 +26,8 @@ def audit(root, seeds, steps):
                 raise ValueError('initialization failed: ' + str(folder))
             if not info['initialization_outputs_exact'] or any(info['initialization_max_abs_difference']):
                 raise ValueError('actual sidecar initialization outputs changed')
+            if info.get('initialization_reference') != 'frozen-pretrained' or not info.get('freeze_transition_is_diagnostic'):
+                raise ValueError('initialization reference is not the matched frozen control')
             if base_sha is None:
                 base_sha = info['base_tensor_sha256']
             if base_sha != info['base_tensor_sha256']:

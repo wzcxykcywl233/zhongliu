@@ -40,6 +40,18 @@
 
 线性坐标头使用等价形式 `W(H+残差)+b = WH+b+W残差`，保留原计算路径。部分CPU算子仅改变requires_grad标志就可能产生约1e-6的数值差异，因此本研究的pretrained对照也固定为冻结标志、权重逐字节不变；这不是微调。初始化审计分别记录冻结标志转换差异，并严格要求挂接支线相对冻结对照完全一致，不能混用历史未冻结计算标志作为零初始化证明。
 
+### 初始化检查修正（initfix-v2）
+
+远程环境记录到冻结转换差异约 `[5.72e-5, 4.23e-6, 1.13e-6]`，旧代码把其中的V/C与本地设定的1e-6阈值比较，导致优化前误拦截。这不是支线权重学习造成的误差。修正后，该转换差异只记录诊断，不使用随机器变化的阈值；仍拒绝非有限值/形状变化，严格验证旧权重哈希不变，并要求挂接零初始化支线相对**冻结预训练对照**的P/V/C输出完全一致，连1e-7的支线差异也不能通过。
+
+旧v1结果、镜像与日志保留。拉取修复后使用新目录启动，不删除frozen-run.json绕过来源校验：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_feature_sidecar_initialization.ps1" -Stage smoke
+```
+
+检查通过后同一入口依次执行 `-Stage validation`、`-Stage test`。正式目录改为 `protocol-40-10-38\feature-sidecar-initfix-v2`，小规模目录为其名称加 `-smoke`。此入口只运行支线研究，不触碰动态锚点结果；不要用旧组合入口重新运行已经冻结的旧目录。
+
 | 支线 | 总参数 | 新增可训练参数 | 对照目的 |
 |---|---:|---:|---|
 | pretrained | 25,385,700 | 0 | 当前历史方法直接对照 |

@@ -1,6 +1,9 @@
 import unittest
 import torch
-from cotracker.models.core.cotracker.feature_sidecar import FeatureSidecar, attach_sidecar, tensor_hash, KINDS
+from cotracker.models.core.cotracker.feature_sidecar import (
+    FeatureSidecar, attach_sidecar, tensor_hash, KINDS,
+    validate_initialization_outputs, attach_sidecar_verified,
+)
 from cotracker.models.core.cotracker.cotracker import EfficientUpdateFormer
 from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOffline
 
@@ -9,6 +12,28 @@ class FeatureSidecarTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
+
+    def test_remote_freeze_transition_does_not_relax_sidecar_identity(self):
+        original = (torch.tensor([1.]), torch.tensor([.9]), torch.tensor([.9]))
+        # Regression for the three transition differences in the remote log.
+        frozen = tuple(x - d for x,d in zip(original,(5.7220458984375e-5,4.231929779052734e-6,1.1324882507324219e-6)))
+        report = validate_initialization_outputs(original, frozen, tuple(x.clone() for x in frozen))
+        self.assertEqual(report['initialization_reference'], 'frozen-pretrained')
+        self.assertEqual(report['initialization_max_abs_difference'], [0.,0.,0.])
+        changed = list(frozen)
+        changed[1] = changed[1] + 1e-7
+        with self.assertRaisesRegex(ValueError, 'zero initialization changed'):
+            validate_initialization_outputs(original, frozen, changed)
+        changed[1] = torch.tensor([float('nan')])
+        with self.assertRaisesRegex(ValueError, 'nonfinite'):
+            validate_initialization_outputs(original, frozen, changed)
+
+    def test_real_full_model_verified_initialization(self):
+        model = CoTrackerThreeOffline(stride=4,corr_radius=3,window_len=60)
+        old = tensor_hash(model.state_dict())
+        report = attach_sidecar_verified(model, 'mlp')
+        self.assertEqual(report['base_tensor_sha256'],old)
+        self.assertEqual(report['initialization_max_abs_difference'],[0.,0.,0.])
 
     def test_identity_gradient_and_no_point_leak(self):
         for kind in KINDS:
