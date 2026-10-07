@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "reference": "anchor_fixed",
+  "profiles": ["anchor_fixed", "anchor_diagnostic", "anchor_reference", "anchor_endpoint", "anchor_rollback", "anchor_rollback_sensitive", "anchor_rollback_long"],
+  "audit_output_hashes": true,
+  "description": "Matched per-point anchor study: no occlusion merging; historical bank frozen after original entry in all matched arms. Historical reference retains original behavior."
+}

@@ -16,6 +16,7 @@ from experiments import (
     ROTATION_BACKCHECK_EXPERIMENTS,
     RETUNE_EXPERIMENTS,
     POINT_DECOUPLING_EXPERIMENTS,
+    ADAPTIVE_ANCHOR_EXPERIMENTS,
     SINGLE_POINT_EXPERIMENTS,
     ExperimentConfig,
     get_experiment_config,
@@ -97,6 +98,7 @@ class ExperimentTests(unittest.TestCase):
             | set(ROTATION_BACKCHECK_EXPERIMENTS)
             | set(RETUNE_EXPERIMENTS)
             | set(POINT_DECOUPLING_EXPERIMENTS)
+            | set(ADAPTIVE_ANCHOR_EXPERIMENTS)
             | set(AUDIT_EXPERIMENTS),
         )
 
@@ -548,7 +550,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(reported_names & set(remaining_names))
         self.assertEqual(
             set(remaining_names),
-            set(EXPERIMENTS) - reported_names - excluded_names - set(RETUNE_EXPERIMENTS) - set(POINT_DECOUPLING_EXPERIMENTS),
+            set(EXPERIMENTS) - reported_names - excluded_names - set(RETUNE_EXPERIMENTS) - set(POINT_DECOUPLING_EXPERIMENTS) - set(ADAPTIVE_ANCHOR_EXPERIMENTS),
         )
         self.assertEqual(remaining_names[-1], "support_grid_15")
         self.assertEqual(

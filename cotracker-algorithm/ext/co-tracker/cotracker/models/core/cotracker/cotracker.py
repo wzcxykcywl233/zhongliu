@@ -527,9 +527,15 @@ class EfficientUpdateFormer(nn.Module):
                 j += 1
         tokens = tokens[:, : N - self.num_virtual_tracks]
 
+        base_tokens = tokens
         flow = self.flow_head(tokens)
+        if hasattr(self, 'feature_sidecar'):
+            residual = self.feature_sidecar.residual(base_tokens, input_tensor)
+            # Linearity gives W(H+dH)+b = WH+b+WdH. Keep the original tensor
+            # strides/GEMM path, so zero initialization is BITWISE identical.
+            flow = flow + torch.nn.functional.linear(residual, self.flow_head.weight)
         if self.linear_layer_for_vis_conf:
-            vis_conf = self.vis_conf_head(tokens)
+            vis_conf = self.vis_conf_head(base_tokens)
             flow = torch.cat([flow, vis_conf], dim=-1)
 
         return flow

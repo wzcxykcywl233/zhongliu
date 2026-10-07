@@ -1,5 +1,15 @@
 # CoTracker3 for Tumor Tracking 
 
+### Dynamic anchors and frozen-Transformer feature sidecars
+
+Two independent 40/10/38 studies are ready in `scripts/run_anchor_and_sidecar_queues.ps1`.
+Use `-Stage smoke`, then `-Stage validation`, then explicitly `-Stage test`.
+The anchor study tests per-point reliability drops and rollback; the sidecar study
+compares MLP, temporal convolution, short-reset and long Mamba-style reference SSMs
+while freezing all pretrained CoTracker tensors. Local Docker runtimes are reused
+without downloading dependencies. See [design, controls and commands](cotracker-algorithm/experiments/ANCHOR_AND_FEATURE_SIDECAR.zh-CN.md).
+Only test-38 official metrics belong in the final performance table.
+
 ### Six independent query-memory refinements
 
 Run `scripts/run_memory_refinement_resumable.ps1` for the diverse-memory control

@@ -53,7 +53,7 @@ foreach ($Profile in $Profiles) {
             if ($ExpectedMode -in @('none','v') -and $Diagnostic.mechanism.state_c_values -ne 0) { throw 'Unexpected C inheritance' }
         }
         foreach ($Property in $Diagnostic.mechanism.PSObject.Properties) {
-            if ($Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*' -or $Property.Name -like 'state_*' -or $Property.Name -like 'runtime_*' -or $Property.Name -like 'occlusion_*') {
+            if ($Property.Name -like 'anchor_*' -or $Property.Name -like 'memory_*' -or $Property.Name -like 'query_memory_*' -or $Property.Name -like 'state_*' -or $Property.Name -like 'runtime_*' -or $Property.Name -like 'occlusion_*') {
                 $DiagnosticRows += [PSCustomObject]@{ Split = $SplitName; Profile = $Profile; Case = $CaseId; Mechanism = $Property.Name; Value = $Property.Value }
             }
         }

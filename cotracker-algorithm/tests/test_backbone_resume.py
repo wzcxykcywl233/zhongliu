@@ -138,7 +138,22 @@ class BackboneResumeTests(unittest.TestCase):
                 'SHA256':'1531458d7c1da577e59cabc15fae4a4c6ec746311371c7cd722abbe0cd1dd5e4'}]}
         new = {'Schema':3,'Steps':1000,'RecoverySource':'old',
                'Source':[{'File':old['Source'][0]['File'],'SHA256':file_sha(trainer)}]}
-        self.assertEqual(verify_transition(old, new, ROOT.parent), [old['Source'][0]['File']])
+        # New feature studies are deliberately NOT valid migrations of the
+        # archived resume-only study. Keep production historical hashes strict.
+        with self.assertRaisesRegex(ValueError, 'resume-only fix'):
+            verify_transition(old, new, ROOT.parent)
+        original = 'unchanged trainer\n'
+        fixed = original + 'from cotracker.utils.resumable_loader import set_resumable_loader_epoch\n' + (
+            '            if args.backbone_growth_study:\n                set_resumable_loader_epoch(train_loader, epoch)\n')
+        with tempfile.TemporaryDirectory() as temp:
+            source_root = Path(temp)
+            source = source_root / old['Source'][0]['File']
+            source.parent.mkdir(parents=True)
+            source.write_text(fixed, encoding='utf-8')
+            old_fixture = dict(old, Source=[dict(old['Source'][0], SHA256=hashlib.sha256(original.encode()).hexdigest())])
+            new_fixture = dict(new, Source=[dict(new['Source'][0], SHA256=file_sha(source))])
+            with patch('recover_backbone_growth.OLD_TRAINER_HASHES', {old_fixture['Source'][0]['SHA256']}):
+                self.assertEqual(verify_transition(old_fixture, new_fixture, source_root), [old['Source'][0]['File']])
         new['Steps'] = 2000
         with self.assertRaisesRegex(ValueError, 'protocol changed'):
             verify_transition(old, new, ROOT.parent)
@@ -188,7 +203,10 @@ class BackboneResumeTests(unittest.TestCase):
             before = {str(p.relative_to(old_root)):file_sha(p) for p in old_root.rglob('*') if p.is_file()}
             # Real strict checkpoint loading is covered in test_backbone_growth;
             # here small payloads isolate recovery selection/copy/provenance.
-            with patch('recover_backbone_growth.validate_checkpoint', return_value={}):
+            # Selection/copy test uses archived protocol, not today's unrelated
+            # feature-study trainer. Transition restrictions are tested above.
+            with patch('recover_backbone_growth.validate_checkpoint', return_value={}), patch(
+                    'recover_backbone_growth.verify_transition', return_value=[trainer_path]):
                 proof = recover(old_root, new_root, ROOT.parent)
                 self.assertEqual(len(proof['reused_arms']), 8)
                 self.assertEqual(proof['retrain_arms'][0]['arm'], 'seed_0/space_time6')

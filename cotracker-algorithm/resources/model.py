@@ -105,6 +105,16 @@ def setup_model(
             with open(checkpoint, "rb") as f:
                 state_dict = torch.load(f, map_location="cpu")
                 architecture = state_dict.get('backbone_architecture', 'base') if isinstance(state_dict, dict) else 'base'
+                sidecar = state_dict.get('feature_sidecar', 'none') if isinstance(state_dict, dict) else 'none'
+                if isinstance(state_dict, dict) and state_dict.get('freeze_base_for_inference', False):
+                    model.frozen_pretrained = True
+                    for parameter in model.parameters():
+                        parameter.requires_grad_(False)
+                if sidecar != 'none':
+                    if architecture != 'base' or mamba_refiner or mamba_replace_time_attention:
+                        raise ValueError('sidecar checkpoint cannot combine backbone modifications')
+                    from cotracker.models.core.cotracker.feature_sidecar import attach_sidecar
+                    attach_sidecar(model, sidecar)
                 if architecture != 'base':
                     if mamba_refiner or mamba_replace_time_attention:
                         raise ValueError('backbone growth cannot be combined with Mamba checkpoints')
@@ -645,6 +655,10 @@ def hierarchical_forward_pass(
     query_memory_refinement: str = "none",
     query_state_inheritance: str = "none",
     query_state_decay_tau: float = 1.0,
+    adaptive_anchor: str = 'none',
+    anchor_relative_drop: float = .15,
+    anchor_patience: int = 2,
+    anchor_max_age: int = 30,
     frame_backcheck_rows=None,
     frame_backcheck_fourway=False,
     rotation_backcheck=False,
@@ -657,6 +671,13 @@ def hierarchical_forward_pass(
     """Track short levels, re-anchor at endpoints, and optionally merge occlusions."""
     if span < 1:
         raise ValueError("span must be positive")
+    if adaptive_anchor != 'none':
+        if adaptive_anchor not in {'fixed', 'diagnostic', 'endpoint', 'rollback'}:
+            raise ValueError('unknown adaptive anchor mode')
+        if support_grid_size != 0 or occlusion_merge or query_state_inheritance != 'none':
+            raise ValueError('anchor study requires grid0, no merge and no state inheritance')
+        if anchor_max_age < span or return_long_fusion_context or return_mask_appearance_context:
+            raise ValueError('unsupported anchor study context/age')
     if feature_gate_distance < 0:
         raise ValueError("feature_gate_distance must be non-negative")
     if not -1.0 <= feature_similarity_threshold <= 1.0:
@@ -789,6 +810,7 @@ def hierarchical_forward_pass(
     # not use overwritten boundary predictions or the failed segment endpoint.
     boundary_states = {}
     backcheck_pending = {}
+    anchor_raw = {}
     if frame_backcheck_rows is not None and (batch != 1 or support_grid_size != 0 or n_iterations < 2):
         raise ValueError("frame backcheck requires batch1, grid0 and >=2 iterations")
     for field in ("state_inherited_segments", "state_v_values", "state_c_values",
@@ -869,6 +891,10 @@ def hierarchical_forward_pass(
         current_memory = captured
         if captured is not None and original_memory is None:
             original_memory = captured
+        if adaptive_anchor != 'none':
+            # Detect failures BEFORE dual-anchor confidence averaging.
+            anchor_raw.clear()
+            anchor_raw['result'] = result
         if global_result is not None:
             global_slice = TrackingResult(
                 global_result.trajectories[:, level_start : level_end + 1],
@@ -1082,6 +1108,74 @@ def hierarchical_forward_pass(
         visibility[:, level_start : level_end + 1] = result.visibility
         confidence[:, level_start : level_end + 1] = result.confidence
         covered[level_start : level_end + 1] = True
+
+    if adaptive_anchor != 'none':
+        from .adaptive_anchor import last_stable_offsets
+        anchor_frames = torch.zeros((batch, point_count), dtype=torch.long, device=device)
+        anchor_positions = queries[..., 1:].clone()
+        cursor = 0
+        while cursor < total_frames - 1:
+            end = min(cursor + span, total_frames - 1)
+            # Bound joint clip length. Expired points use an explicitly recorded
+            # global recovery query, NOT a silently promoted unreliable local point.
+            expired = (end - anchor_frames) > anchor_max_age
+            effective_frames = torch.where(expired, torch.full_like(anchor_frames, cursor), anchor_frames)
+            if bool(expired.any()) and global_result is None:
+                raise ValueError('bounded anchor recovery requires original global branch')
+            effective_positions = anchor_positions
+            if global_result is not None:
+                effective_positions = torch.where(expired[..., None], global_result.trajectories[:, cursor], anchor_positions)
+            clip_start = int(effective_frames.min())
+            level_queries = torch.cat(((effective_frames - clip_start)[..., None].to(queries.dtype), effective_positions), -1)
+            logger.info('Adaptive anchor cursor=%d clip=%d-%d oldest=%d expired=%d',
+                        cursor, clip_start, end, int(anchor_frames.min()), int(expired.sum()))
+            result, captured = run_level(clip_start, end, level_queries)
+            raw = anchor_raw['result']
+            offsets, dropped, pending = last_stable_offsets(raw.visibility, raw.confidence,
+                effective_frames - clip_start, relative=anchor_relative_drop, patience=anchor_patience)
+            # Mixed query frames are not a single memory-bank timestamp. Freeze
+            # historical bank writes after frame0 for ALL matched study arms.
+            if cursor == 0:
+                commit_query_memory(0, result, captured)
+            first = cursor + 1 if cursor else 0
+            relative_first = first - clip_start
+            trajectories[:, first:end + 1] = result.trajectories[:, relative_first:]
+            visibility[:, first:end + 1] = result.visibility[:, relative_first:]
+            confidence[:, first:end + 1] = result.confidence[:, relative_first:]
+            if bool(expired.any()):
+                trajectories[:, first:end + 1] = torch.where(expired[:, None, :, None],
+                    global_result.trajectories[:, first:end + 1], trajectories[:, first:end + 1])
+                visibility[:, first:end + 1] = torch.where(expired[:, None],
+                    global_result.visibility[:, first:end + 1], visibility[:, first:end + 1])
+                confidence[:, first:end + 1] = torch.where(expired[:, None],
+                    global_result.confidence[:, first:end + 1], confidence[:, first:end + 1])
+            covered[first:end + 1] = True
+            _diagnostic_add(diagnostics, 'anchor_decisions', offsets.numel())
+            _diagnostic_add(diagnostics, 'anchor_sustained_drops', int(dropped.sum()))
+            _diagnostic_add(diagnostics, 'anchor_pending_drops', int(pending.sum()))
+            _diagnostic_add(diagnostics, 'anchor_global_fallback_points', int(expired.sum()))
+            _diagnostic_max(diagnostics, 'anchor_clip_frames_max', end - clip_start + 1)
+            proposed = offsets + clip_start
+            if adaptive_anchor in {'fixed', 'diagnostic'}:
+                proposed = torch.full_like(proposed, end)
+            elif adaptive_anchor == 'endpoint':
+                proposed = torch.where(dropped | pending, anchor_frames, torch.full_like(proposed, end))
+            # Expired failed points keep their old reference; retries do not
+            # loop in place because the output cursor advances unconditionally.
+            proposed = torch.where(expired & (dropped | pending), anchor_frames, proposed)
+            _diagnostic_add(diagnostics, 'anchor_rollback_points', int((proposed < end).sum()))
+            gather_index = (proposed - clip_start).clamp(0, end - clip_start)
+            selected = result.trajectories.gather(1, gather_index[:, None, :, None].expand(-1, 1, -1, 2))[:, 0]
+            # Retained references outside this bounded clip keep BOTH time and P.
+            selected = torch.where((proposed < clip_start)[..., None], anchor_positions, selected)
+            selected = torch.where((proposed == effective_frames)[..., None], effective_positions, selected)
+            anchor_positions = selected.detach().clone()
+            anchor_frames = proposed
+            cursor = end
+        if not bool(covered.all()):
+            raise RuntimeError('adaptive tracker failed to cover all frames')
+        trajectories[:, 0] = queries[..., 1:]
+        return TrackingResult(trajectories, visibility, confidence)
 
     while start < total_frames - 1:
         end = min(start + span, total_frames - 1)

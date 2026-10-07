@@ -623,6 +623,9 @@ class Lite(LightningLite):
             if not args.restore_ckpt:
                 raise ValueError('backbone growth requires the original pretrained checkpoint')
             architecture_report = warm_start(model, self.load(args.restore_ckpt), args.backbone_architecture)
+            if args.feature_sidecar != 'none':
+                from cotracker.models.core.cotracker.feature_sidecar import attach_sidecar_verified
+                architecture_report['sidecar'] = attach_sidecar_verified(model, args.feature_sidecar)
             save_json(Path(args.ckpt_path) / 'initialization-report.json', architecture_report)
             repair_audit_tail(Path(args.ckpt_path) / 'paired-steps.jsonl')
             logging.info('Backbone initialization proof: %s', architecture_report)
@@ -794,6 +797,8 @@ class Lite(LightningLite):
                         continue
                     if loaded.get('backbone_architecture') != args.backbone_architecture:
                         raise ValueError('resume checkpoint has a different backbone architecture')
+                    if loaded.get('feature_sidecar', 'none') != args.feature_sidecar:
+                        raise ValueError('resume checkpoint has a different feature sidecar')
                     ckpt_path, ckpt = candidate, loaded
                     break
                 if ckpt is None:
@@ -849,6 +854,9 @@ class Lite(LightningLite):
         model, optimizer = self.setup(model, optimizer, move_to_device=False)
         # model.cuda()
         model.train()
+        if args.feature_sidecar != 'none':
+            model.eval()
+            _unwrap_model(model).updateformer.feature_sidecar.train()
 
         def save_training_checkpoint(epoch_index, next_batch_index):
             ckpt_iter = str(total_steps).zfill(8)
@@ -869,6 +877,7 @@ class Lite(LightningLite):
             }
             if args.backbone_growth_study:
                 save_dict['backbone_architecture'] = args.backbone_architecture
+                save_dict['feature_sidecar'] = args.feature_sidecar
                 save_dict['architecture_report'] = architecture_report
             logging.info(f"Saving atomic checkpoint {save_path}")
             self.save(save_dict, temporary_path)
@@ -1094,6 +1103,7 @@ class Lite(LightningLite):
             final = _unwrap_model(model).state_dict()
             if args.backbone_growth_study:
                 final = {'model': final, 'backbone_architecture': args.backbone_architecture,
+                         'feature_sidecar': args.feature_sidecar,
                          'architecture_report': architecture_report, 'total_steps': total_steps}
             torch.save(final, PATH + '.tmp')
             with open(PATH + '.tmp', 'rb') as stream:
@@ -1116,6 +1126,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--restore_ckpt", help="path to restore a checkpoint")
     parser.add_argument('--backbone_architecture', choices=ARCHITECTURES, default='base')
+    parser.add_argument('--feature_sidecar', choices=['none', 'mlp', 'conv', 'mamba_short', 'mamba'], default='none',
+                        help='freeze base; train a rich-feature residual before frozen output heads')
     parser.add_argument('--backbone_growth_study', action='store_true',
                         help='paired full-model depth study with checked pretrained initialization and structured step audits')
     parser.add_argument("--ckpt_path", help="path to save checkpoints")
@@ -1480,6 +1492,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.feature_sidecar != 'none' and (not args.backbone_growth_study or args.backbone_architecture != 'base'
+        or args.auxiliary_teacher_weight != 0 or args.trackrad_mask_supervision_weight != 0
+        or args.confidence_target_mode != 'hard' or args.mamba_time_replacement or args.mamba_trajectory_refiner):
+        parser.error('feature sidecar requires paired base study, hard labels, no auxiliary/mask loss or other Mamba changes')
     if args.backbone_architecture != 'base' and not args.backbone_growth_study:
         parser.error('non-base backbone requires --backbone_growth_study')
     if args.backbone_growth_study and (

@@ -110,6 +110,11 @@ def run_algorithm(
             'backbone_architecture': getattr(model, 'backbone_architecture', 'base'),
             'parameters': sum(parameter.numel() for parameter in model.parameters()) if hasattr(model, 'parameters') else 0,
         }
+        if hasattr(model, 'feature_sidecar_kind'):
+            diagnostics['model']['feature_sidecar'] = model.feature_sidecar_kind
+            model.updateformer.feature_sidecar.diagnostics = numeric_diagnostics
+        if getattr(model, 'frozen_pretrained', False):
+            diagnostics['model']['frozen_pretrained'] = True
 
     # Step 3: Create BatchData object -------------------------------------------------
     video = frames_tensor
@@ -186,6 +191,10 @@ def run_algorithm(
                 query_memory_refinement=config.query_memory_refinement,
                 query_state_inheritance=config.query_state_inheritance,
                 query_state_decay_tau=config.query_state_decay_tau,
+                adaptive_anchor=config.adaptive_anchor,
+                anchor_relative_drop=config.anchor_relative_drop,
+                anchor_patience=config.anchor_patience,
+                anchor_max_age=config.anchor_max_age,
                 frame_backcheck_rows=backcheck_rows,
                 frame_backcheck_fourway=config.frame_backcheck_fourway,
                 rotation_backcheck=config.rotation_backcheck,

@@ -53,8 +53,21 @@ class ExperimentConfig:
     mask_appearance_displacement_penalty: float = 0.01
     query_parent_points: int = 0
     reconstruction_points: int = 0
+    adaptive_anchor: str = 'none'
+    anchor_relative_drop: float = .15
+    anchor_patience: int = 2
+    anchor_max_age: int = 30
 
     def __post_init__(self) -> None:
+        if self.adaptive_anchor not in {'none', 'fixed', 'diagnostic', 'endpoint', 'rollback'}:
+            raise ValueError('unsupported adaptive anchor policy')
+        if not 0 < self.anchor_relative_drop < 1 or self.anchor_patience < 1 or self.anchor_max_age < 1:
+            raise ValueError('invalid adaptive anchor controls')
+        if self.adaptive_anchor != 'none' and (self.support_grid_size != 0 or self.query_state_inheritance != 'none'):
+            raise ValueError('adaptive anchor study requires grid0 without inherited logits')
+        if self.adaptive_anchor != 'none' and (self.occlusion_merge or self.hierarchical_span < 1
+                                               or self.anchor_max_age < self.hierarchical_span):
+            raise ValueError('adaptive anchor requires positive bounded span without merging')
         if self.query_parent_points and self.query_parent_points < self.border_points:
             raise ValueError('query_parent_points must cover all tracking queries')
         if self.reconstruction_points and not 3 <= self.reconstruction_points <= self.border_points:
@@ -454,7 +467,18 @@ POINT_DECOUPLING_EXPERIMENTS = {
     'pd_sparse_native': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], border_points=250),
 }
 
+ADAPTIVE_ANCHOR_EXPERIMENTS: dict[str, ExperimentConfig] = {
+    'anchor_reference': MEMORY_REFINEMENT_EXPERIMENTS['memory_control'],
+    'anchor_fixed': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='fixed', occlusion_merge=False),
+    'anchor_diagnostic': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='diagnostic', occlusion_merge=False),
+    'anchor_endpoint': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='endpoint', occlusion_merge=False),
+    'anchor_rollback': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='rollback', occlusion_merge=False),
+    'anchor_rollback_sensitive': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='rollback', anchor_relative_drop=.08, occlusion_merge=False),
+    'anchor_rollback_long': replace(MEMORY_REFINEMENT_EXPERIMENTS['memory_control'], adaptive_anchor='rollback', anchor_max_age=60, occlusion_merge=False),
+}
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
+    **ADAPTIVE_ANCHOR_EXPERIMENTS,
     **POINT_DECOUPLING_EXPERIMENTS,
     **RETUNE_EXPERIMENTS,
     **SINGLE_POINT_EXPERIMENTS,

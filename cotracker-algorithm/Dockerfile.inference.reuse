@@ -1,0 +1,10 @@
+ARG INFERENCE_BASE_IMAGE
+FROM ${INFERENCE_BASE_IMAGE}
+USER user
+WORKDIR /opt/app
+ENV PYTHONUNBUFFERED=1
+COPY --chown=user:user ext/co-tracker /opt/app/ext/co-tracker
+COPY --chown=user:user resources /opt/app/resources
+COPY --chown=user:user experiments /opt/app/experiments
+COPY --chown=user:user *.py /opt/app/
+ENTRYPOINT ["/opt/app/.pixi/envs/cuda/bin/python", "inference.py"]
