@@ -52,6 +52,12 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhong
 
 检查通过后同一入口依次执行 `-Stage validation`、`-Stage test`。正式目录改为 `protocol-40-10-38\feature-sidecar-initfix-v2`，小规模目录为其名称加 `-smoke`。此入口只运行支线研究，不触碰动态锚点结果；不要用旧组合入口重新运行已经冻结的旧目录。
 
+### 首批训练模式修正（modefix-v3，当前入口默认）
+
+远程初始化通过后，第一批数据触发了旧训练器的 `assert model.training`。支线研究刻意使用“主干eval、支线train”，故不能沿用全模型train断言，也不能为通过检查而把冻结主干全部切回train。修正后，首批及每次评估结束恢复训练时统一设置混合模式；每批检查仅支线处于train且可训练，所有旧模块处于eval且参数冻结。原全模型训练实验继续使用原train检查。
+
+入口仍为 `repair_feature_sidecar_initialization.ps1`，默认正式目录更新到 `protocol-40-10-38\feature-sidecar-modefix-v3`，小规模目录为其名称加 `-smoke`；v1/v2目录均保留不动。已增加四种支线真实offline `is_train=True` 首批前向、反向、优化步骤、冻结权重一致性与评估后模式恢复测试。本地CPU检查不等于远程Fabric/NCCL GPU验证，请仍先运行smoke。
+
 | 支线 | 总参数 | 新增可训练参数 | 对照目的 |
 |---|---:|---:|---|
 | pretrained | 25,385,700 | 0 | 当前历史方法直接对照 |

@@ -3,6 +3,7 @@ import torch
 from cotracker.models.core.cotracker.feature_sidecar import (
     FeatureSidecar, attach_sidecar, tensor_hash, KINDS,
     validate_initialization_outputs, attach_sidecar_verified,
+    set_sidecar_training_mode, assert_sidecar_training_mode,
 )
 from cotracker.models.core.cotracker.cotracker import EfficientUpdateFormer
 from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOffline
@@ -34,6 +35,42 @@ class FeatureSidecarTests(unittest.TestCase):
         report = attach_sidecar_verified(model, 'mlp')
         self.assertEqual(report['base_tensor_sha256'],old)
         self.assertEqual(report['initialization_max_abs_difference'],[0.,0.,0.])
+
+    def test_first_training_batch_in_mixed_mode_for_every_branch(self):
+        # Exercise the real offline train_data path, not just a standalone MLP.
+        for kind in KINDS:
+            torch.manual_seed(21)
+            model = CoTrackerThreeOffline(stride=4,corr_radius=3,window_len=60)
+            attach_sidecar(model,kind)
+            before_hash = tensor_hash(model.state_dict())
+            set_sidecar_training_mode(model)
+            video = torch.rand(1,6,3,64,64) * 255
+            queries = torch.tensor([[[0.,16.,16.],[2.,32.,32.],[0.,48.,48.]]])
+            optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],lr=1e-3)
+            out = model(video=video,queries=queries,iters=2,is_train=True)
+            self.assertIsNotNone(out[3])
+            target = out[0].detach() + 1.
+            loss = sum((prediction-target).square().mean() for prediction in out[3][0][0])
+            optimizer.zero_grad()
+            loss.backward()
+            self.assertGreater(model.updateformer.feature_sidecar.output.weight.grad.abs().sum(),0)
+            self.assertTrue(all(p.grad is None for n,p in model.named_parameters() if '.feature_sidecar.' not in n))
+            optimizer.step()
+            assert_sidecar_training_mode(model)
+            self.assertEqual(before_hash,tensor_hash(model.state_dict()))
+            # Evaluator switches all modules to eval; training must restore ONLY
+            # the branch afterwards, including at epoch boundaries.
+            model.eval()
+            with self.assertRaisesRegex(RuntimeError,'base eval and branch train'):
+                assert_sidecar_training_mode(model)
+            set_sidecar_training_mode(model)
+            model.fnet.train()
+            with self.assertRaisesRegex(RuntimeError,'frozen module entered train'):
+                assert_sidecar_training_mode(model)
+            set_sidecar_training_mode(model)
+            model.updateformer.flow_head.weight.requires_grad_(True)
+            with self.assertRaisesRegex(RuntimeError,'unexpected trainable/frozen'):
+                assert_sidecar_training_mode(model)
 
     def test_identity_gradient_and_no_point_leak(self):
         for kind in KINDS:

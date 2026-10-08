@@ -139,6 +139,27 @@ def attach_sidecar(model, kind):
             'backend': 'pytorch-reference-selective-ssm' if kind.startswith('mamba') else kind}
 
 
+def set_sidecar_training_mode(model):
+    """Mixed mode is intentional: frozen base eval, trainable branch train."""
+    model.eval()
+    model.updateformer.feature_sidecar.train()
+    assert_sidecar_training_mode(model)
+
+
+def assert_sidecar_training_mode(model):
+    prefix = 'updateformer.feature_sidecar'
+    branch = getattr(model.updateformer, 'feature_sidecar', None)
+    if model.training or branch is None or not branch.training:
+        raise RuntimeError('sidecar training requires base eval and branch train')
+    for name, module in model.named_modules():
+        if not (name == prefix or name.startswith(prefix + '.')) and module.training:
+            raise RuntimeError('frozen module entered train mode: ' + name)
+    for name, parameter in model.named_parameters():
+        expected = name.startswith(prefix + '.')
+        if parameter.requires_grad != expected:
+            raise RuntimeError('unexpected trainable/frozen parameter: ' + name)
+
+
 def attach_sidecar_verified(model, kind):
     """Small real image/correlation/two-iteration proof before any optimization."""
     threads, mode = torch.get_num_threads(), model.training

@@ -61,6 +61,9 @@ from cotracker.models.core.cotracker.backbone_growth import (
     ARCHITECTURES, warm_start, save_json, repair_audit_tail,
 )
 from cotracker.utils.resumable_loader import set_resumable_loader_epoch
+from cotracker.models.core.cotracker.feature_sidecar import (
+    set_sidecar_training_mode, assert_sidecar_training_mode,
+)
 from cotracker.utils.train_utils import (
     Logger,
     get_eval_dataloader,
@@ -853,10 +856,14 @@ class Lite(LightningLite):
             logging.info(f"Done loading checkpoint")
         model, optimizer = self.setup(model, optimizer, move_to_device=False)
         # model.cuda()
-        model.train()
-        if args.feature_sidecar != 'none':
-            model.eval()
-            _unwrap_model(model).updateformer.feature_sidecar.train()
+        def enter_training_mode():
+            if args.feature_sidecar != 'none':
+                model.eval()  # Include the Fabric/DDP wrapper in eval mode.
+                set_sidecar_training_mode(_unwrap_model(model))
+            else:
+                model.train()
+
+        enter_training_mode()
 
         def save_training_checkpoint(epoch_index, next_batch_index):
             ckpt_iter = str(total_steps).zfill(8)
@@ -914,7 +921,7 @@ class Lite(LightningLite):
                 logger.writer,
                 total_steps,
             )
-            model.train()
+            enter_training_mode()
             torch.cuda.empty_cache()
 
         if total_steps >= args.num_steps:
@@ -938,7 +945,10 @@ class Lite(LightningLite):
 
                 optimizer.zero_grad()
 
-                assert model.training
+                if args.feature_sidecar != 'none':
+                    assert_sidecar_training_mode(_unwrap_model(model))
+                else:
+                    assert model.training
 
                 if args.paired_step_seed is not None:
                     step_seed = int(args.paired_step_seed) + int(total_steps)
@@ -1089,7 +1099,7 @@ class Lite(LightningLite):
                                 logger.writer,
                                 total_steps,
                             )
-                            model.train()
+                            enter_training_mode()
                             torch.cuda.empty_cache()
 
                 self.barrier()
