@@ -58,6 +58,29 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhong
 
 入口仍为 `repair_feature_sidecar_initialization.ps1`，默认正式目录更新到 `protocol-40-10-38\feature-sidecar-modefix-v3`，小规模目录为其名称加 `-smoke`；v1/v2目录均保留不动。已增加四种支线真实offline `is_train=True` 首批前向、反向、优化步骤、冻结权重一致性与评估后模式恢复测试。本地CPU检查不等于远程Fabric/NCCL GPU验证，请仍先运行smoke。
 
+### 正式推理导入修正（inferencefix-v4，仅评估恢复）
+
+12组训练完成后，正式验证的第一组MLP报 `No module named ...feature_sidecar`。复用镜像的已安装CoTracker仍是旧版本；训练和旧GPU smoke显式把仓库ext源码放在导入路径最前，而真正的 `inference.py → model.py` 入口没有这样做。因此旧smoke通过不能证明正式入口正确。
+
+现在推理镜像显式设置本地源码PYTHONPATH，model入口也在导入resources之前选择仓库源码。若进程此前已经载入其他来源的CoTracker，则直接拒绝，不能清空模块后混用旧新类。修复不修改主干/支线结构、权重、训练器、推理参数或数值公式。
+
+**已经完成modefix-v3正式训练的电脑，不要重新执行训练入口，也不要删除旧指纹。** 新入口仅运行评估：
+
+```powershell
+git -C "C:\zhongliu\zhongliu-tuning" pull --ff-only origin main
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_feature_sidecar_inference.ps1" -Stage validation
+```
+
+保留原 `feature-sidecar-modefix-v3/train`；原目录只读挂载，不复制、改写或重训12组权重。严格验证源码转换仅包含已审核的导入路径修改和审计输出重定向，训练/模型/数据/配方不得变化；重新计算12组完整配对、冻结张量及最终权重审计，并核验原预训练对照。新结果根为 `feature-sidecar-inferencefix-v4`。原基线验证也重跑，**不复用旧正式入口产生的预测**。
+
+先用真正的model入口对四种已训练支线做GPU推理预检，再评估13组（冻结预训练对照+四支线×三种子）10例验证。评估过程仍按病例断点提交；重启后重复相同命令恢复。完成后显式启动38例测试：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\repair_feature_sidecar_inference.ps1" -Stage test
+```
+
+测试要求新目录的验证完成且指标哈希未改变。输出为 `feature-sidecar-inferencefix-v4/test-38/feature-sidecar-summary.csv`、`feature-sidecar-paired-deltas.csv`、`feature-sidecar-paired-cases.csv`。恢复入口不含训练阶段；CPU审计不训练、不调用优化器。本地已测试真实model入口在旧包优先时仍选新源码、拒绝已经载入旧包、严格源码转换及模拟队列的只读/数据/验证顺序保护；真实CUDA预检仍由远程电脑执行。
+
 | 支线 | 总参数 | 新增可训练参数 | 对照目的 |
 |---|---:|---:|---|
 | pretrained | 25,385,700 | 0 | 当前历史方法直接对照 |

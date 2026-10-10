@@ -3,6 +3,7 @@ FROM ${INFERENCE_BASE_IMAGE}
 USER user
 WORKDIR /opt/app
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/opt/app/ext/co-tracker:/opt/app
 COPY --chown=user:user ext/co-tracker /opt/app/ext/co-tracker
 COPY --chown=user:user resources /opt/app/resources
 COPY --chown=user:user experiments /opt/app/experiments

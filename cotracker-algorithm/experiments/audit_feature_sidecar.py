@@ -13,7 +13,7 @@ from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOff
 from cotracker.models.core.cotracker.backbone_growth import save_json
 
 
-def audit(root, seeds, steps):
+def audit(root, seeds, steps, output=None):
     proofs, hashes = [], {}
     torch.set_num_threads(1)
     for seed in seeds:
@@ -63,8 +63,9 @@ def audit(root, seeds, steps):
                            'parameters': current['parameters'], 'trainable_parameters': current['trainable_parameters']})
     proof = {'complete': True, 'seeds': seeds, 'steps': steps, 'proofs': proofs,
              'final_checkpoints_sha256': hashes, 'paired_teacher_case_query_video_sequences': True}
-    save_json(root / 'training-audit.json', proof)
+    save_json(output if output is not None else root / 'training-audit.json', proof)
     print(json.dumps(proof), flush=True)
+    return proof
 
 
 if __name__ == '__main__':

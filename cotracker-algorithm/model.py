@@ -17,6 +17,9 @@ import os
 import numpy as np
 import torch
 
+from local_cotracker_source import activate_local_cotracker
+activate_local_cotracker()
+
 import resources
 from experiments import get_experiment_config
 from tuning import build_validity_mask, temporal_median_smooth
