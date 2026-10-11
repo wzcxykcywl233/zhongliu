@@ -7,10 +7,12 @@ param(
     [ValidateRange(1,5)][int]$ProbeSteps = 3,
     [ValidateRange(60,600)][int]$ProfileTimeoutSeconds = 180,
     [ValidateRange(120,1800)][int]$TrainingTimeoutSeconds = 900,
-    [switch]$CompactScan
+    [switch]$CompactScan,
+    [switch]$CompactSoak
 )
 $ErrorActionPreference = 'Stop'
 if ($CompactScan -and ($ProbeSteps -ne 3 -or $Stage -notin @('profile','training'))) { throw 'Compact scan allows GPU proof then three-step training diagnosis only.' }
+if ($CompactSoak -and -not $CompactScan) { throw 'Soak requires the compact GPU proof gate.' }
 $RepoRoot=(Resolve-Path -LiteralPath $RepoRoot).Path
 $TrainingResultsRoot=(Resolve-Path -LiteralPath $TrainingResultsRoot).Path.TrimEnd('\')
 $ResultsRoot=[IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
@@ -69,7 +71,7 @@ try {
     Write-DiagnosticJson (Join-Path $ResultsRoot 'frozen-study.json') ([ordered]@{Schema=1;Source=$Source;TrainingResultsRoot=$TrainingResultsRoot;
         OldProtocolSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'frozen-run.json')).Hash;
         OldAuditSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'train\training-audit.json')).Hash;
-        Images=$OldImages;CompactScan=[bool]$CompactScan;ProbeSteps=$ProbeSteps;SchedulerNumSteps=1000;ProfileTimeoutSeconds=$ProfileTimeoutSeconds;
+        Images=$OldImages;CompactScan=[bool]$CompactScan;CompactSoak=[bool]$CompactSoak;ProbeSteps=$ProbeSteps;SchedulerNumSteps=1000;ProfileTimeoutSeconds=$ProfileTimeoutSeconds;
         TrainingTimeoutSeconds=$TrainingTimeoutSeconds;TimingKinds=@('mlp','mamba');SequenceLen=60;Points=128;Iterations=4}) -Frozen
     Start-Transcript -Path (Join-Path $ResultsRoot 'queue.log') -Append | Out-Null; $Started=$true
     $Images=Initialize-LocalExperimentImages -RepoRoot $RepoRoot -ResultsRoot $ResultsRoot -TrainingRuntime $OldImages.Training -InferenceRuntime $OldImages.Inference
@@ -130,6 +132,10 @@ try {
             $CompactRuntime=Join-Path $ResultsRoot 'compact-runtime.json'
             Write-DiagnosticJson $CompactRuntime $Ready.runtime -Frozen
         }
+        if ($CompactSoak) {
+            . (Join-Path $RepoRoot 'scripts\sidecar_stability_tasks.ps1')
+            Invoke-SidecarStabilityTasks
+        } else {
         foreach ($Kind in @('mlp','mamba')) {
             $Folder=Join-Path $ResultsRoot "training\seed_0\$Kind"; New-Item -ItemType Directory -Force -Path $Folder | Out-Null
             $Output=Join-Path $Folder 'phase-profile.json'
@@ -156,10 +162,16 @@ try {
             }
             if (-not (Test-Path -LiteralPath $Output)) { throw 'No phase profile returned.' }
         }
+        }
     }
+    if ($CompactSoak -and $Stage -eq 'training') {
+        Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
+            '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/summarize_sidecar_stability.py','--root','/study') (Join-Path $ResultsRoot 'stability-summary.log')
+    } else {
     Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
         '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/summarize_sidecar_runtime.py',
         '--root','/study','--stage',$Stage,'--steps',([string]$ProbeSteps)) (Join-Path $ResultsRoot 'summary.log')
+    }
     if ($CompactScan -and $Stage -eq 'profile') {
         Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
             '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/verify_compact_scan_proof.py','--root','/study') (Join-Path $ResultsRoot 'compact-proof.log')

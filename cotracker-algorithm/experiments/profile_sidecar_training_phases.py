@@ -6,6 +6,8 @@ results, and synchronized timing must not be read as production throughput.
 import argparse
 import json
 import os
+import math
+import shutil
 from pathlib import Path
 import sys
 import time
@@ -49,7 +51,7 @@ def read_probe_runtime(path):
 
 def check_training_headroom(row):
     memory=row['memory_after']
-    if memory.get('peak_allocated_mib',float('inf'))>20480 or memory.get('peak_reserved_mib',float('inf'))>20480 or memory.get('driver_free_mib',0)<2048:
+    if not all(math.isfinite(memory.get(k,float('nan'))) for k in ('peak_allocated_mib','peak_reserved_mib','driver_free_mib')) or memory.get('peak_allocated_mib',float('inf'))>20480 or memory.get('peak_reserved_mib',float('inf'))>20480 or memory.get('driver_free_mib',0)<2048:
         raise ValueError('Compact real training exceeded 20 GiB / 2 GiB free headroom; preserve partial report, do not continue')
 
 
@@ -60,18 +62,55 @@ def run(args):
     if any(os.environ.get(n) for n in ('TRACKRAD_SIDECAR_RUNTIME','COTRACKER_CHECKPOINT')):
         raise ValueError('Unexpected model/runtime override')
     runtime=read_probe_runtime(args.runtime_config)
+    soak=getattr(args,'soak',False)
+    resume=getattr(args,'resume_50',False)
+    if soak and (runtime is None or args.steps not in (50,100)):
+        raise ValueError('Soak requires compact execution and exactly 50 or 100 updates')
+    if resume and (not soak or args.steps!=100): raise ValueError('Only 50-to-100 soak resume is allowed')
     trainer=ROOT/'ext'/'co-tracker'/'train_on_real_data.py'
     if file_sha(trainer)!=args.trainer_sha256.lower(): raise ValueError('Original trainer changed')
     args.output.mkdir(parents=True,exist_ok=True)
-    if list(args.output.glob('*.pth')) or (args.output/'paired-steps.jsonl').exists():
+    previous_rows=[]
+    if resume:
+        previous=json.loads((args.output/'phase-profile.json').read_text())
+        old_config=json.loads((args.output/'run-config.json').read_text())
+        if not previous['complete'] or previous['diagnostic_steps']!=50 or previous.get('sidecar_runtime')!=runtime or old_config['kind']!=args.kind:
+            raise ValueError('Resume requires a complete matching 50-step compact segment')
+        if file_sha(args.output/'cotracker_three_final.pth')!=previous['final_checkpoint_sha256']:
+            raise ValueError('50-step final checkpoint changed')
+        checkpoints_found=sorted(args.output.glob('model_cotracker_three_*.pth'))
+        expected=args.output/'model_cotracker_three_00000050.pth'
+        if not checkpoints_found or checkpoints_found[-1]!=expected: raise ValueError('Expected latest full checkpoint at step 50')
+        saved=torch.load(expected,map_location='cpu',weights_only=False)
+        if saved['total_steps']!=50 or saved['feature_sidecar']!=args.kind or not {'optimizer','scheduler','rng_state','teacher_sampler'}.issubset(saved):
+            raise ValueError('Incomplete resume state')
+        final50=torch.load(args.output/'cotracker_three_final.pth',map_location='cpu',weights_only=True)
+        if set(saved['model'])!=set(final50['model']) or any(not torch.equal(v,final50['model'][k]) for k,v in saved['model'].items()):
+            raise ValueError('Full resume checkpoint and final50 weights differ')
+        records(args.output/'paired-steps.jsonl',50,'base')
+        save_json(args.output/'phase-profile-first50.json',previous)
+        previous_rows=previous['rows']
+        resume_sha=file_sha(expected)
+        # Contains "final", so the unchanged trainer never mistakes this
+        # immutable boundary copy for a checkpoint eligible for auto-resume.
+        boundary=args.output/'resume-boundary-final.pth'
+        if boundary.exists(): raise ValueError('Boundary proof already exists; preserve partial resume and use a new root')
+        shutil.copy2(expected,boundary)
+        del saved,final50
+    elif list(args.output.glob('*.pth')) or (args.output/'paired-steps.jsonl').exists():
         raise ValueError('Partial diagnostic training exists; preserve it and use a new results root. No resume mixing.')
     source=trainer.read_text(encoding='utf-8')
-    compiled,anchors=instrument(source,str(trainer))
-    probe=PhaseProbe(args.steps)
+    compiled,anchors=instrument(source,str(trainer),resume_safe=soak)
+    probe=PhaseProbe(args.steps,monitor_health=soak)
     report={'complete':False,'kind':args.kind,'diagnostic_steps':args.steps,'scheduler_num_steps':1000,
         'trainer_sha256':file_sha(trainer),'instrumentation_sha256':file_sha(Path(__file__).with_name('training_phase_probe.py')),
         'timing_anchors':anchors,'device':torch.cuda.get_device_name(),'torch':torch.__version__,
         'note':'Intrusive synchronized phase timing. Student exclusive time includes backbone and other student operations; backward_total includes gradients through frozen operations and cannot isolate sidecar backward. No official performance or throughput claim.'}
+    if soak:
+        report.update(soak=True,resumed_from_step=50 if resume else 0)
+        if resume:
+            report['resume_checkpoint_sha256']=resume_sha
+            report['first_segment_profile_sha256']=file_sha(args.output/'phase-profile-first50.json')
     config={'kind':args.kind,'profile':'seed_0_'+args.kind,
         'steps':args.steps,'scheduler_num_steps':1000,'trainer_sha256':file_sha(trainer),
         'sequence_len':60,'traj_per_sample':128,'train_iters':4,'lr':.00005,
@@ -80,10 +119,12 @@ def run(args):
     if runtime is not None:
         config['sidecar_runtime']=runtime;report['sidecar_runtime']=runtime
         report['runtime_config_sha256']=file_sha(args.runtime_config)
+    if resume and {k:v for k,v in old_config.items() if k!='steps'}!={k:v for k,v in config.items() if k!='steps'}:
+        raise ValueError('Resume changed training recipe; preserve boundary proof and stop')
     save_json(args.output/'run-config.json',config)
     save_json(args.output/'phase-profile.json',report)
     def save_progress():
-        report.update({'rows':probe.rows,'outside_steps':probe.outside_steps,'timing_errors':probe.timing_errors})
+        report.update({'rows':previous_rows+probe.rows,'outside_steps':probe.outside_steps,'timing_errors':probe.timing_errors})
         save_json(args.output/'phase-profile.json',report)
         if runtime is not None and probe.rows[-1]['complete'] and not probe.timing_errors:
             check_training_headroom(probe.rows[-1])
@@ -97,9 +138,10 @@ def run(args):
         with probe.installed():
             exec(compiled,{'__name__':'__main__','__file__':str(trainer),'__probe__':probe})
         paired=records(args.output/'paired-steps.jsonl',args.steps,'base')
-        if probe.timing_errors or len(probe.rows)!=args.steps or any(not r['complete'] or r['optimizer_updates']!=1 for r in probe.rows):
+        all_rows=previous_rows+probe.rows
+        if probe.timing_errors or len(all_rows)!=args.steps or any(not r['complete'] or r['optimizer_updates']!=1 for r in all_rows):
             raise ValueError('Diagnostic update coverage differs')
-        if [r['step'] for r in probe.rows]!=list(range(args.steps)): raise ValueError('Wrong step order')
+        if [r['step'] for r in all_rows]!=list(range(args.steps)): raise ValueError('Wrong step order')
         final=torch.load(args.output/'cotracker_three_final.pth',map_location='cpu',weights_only=True)
         if final['total_steps']!=args.steps: raise ValueError('Diagnostic stop did not execute')
         report['complete']=True
@@ -111,7 +153,7 @@ def run(args):
     finally:
         if runtime is not None: os.environ.pop('TRACKRAD_SIDECAR_RUNTIME',None)
         sys.argv=argv; os.chdir(workdir)
-        report.update({'rows':probe.rows,'outside_steps':probe.outside_steps,
+        report.update({'rows':previous_rows+probe.rows,'outside_steps':probe.outside_steps,
             'timing_errors':probe.timing_errors,'unassigned_data_seconds':probe.pending_data,'process_wall_seconds':time.perf_counter()-start})
         save_json(args.output/'phase-profile.json',report)
     print('REAL TRAINING PHASE PROFILE COMPLETE '+str(args.output/'phase-profile.json'),flush=True)
@@ -126,6 +168,10 @@ if __name__=='__main__':
     p.add_argument('--checkpoints',type=Path,required=True)
     p.add_argument('--trainer-sha256',required=True)
     p.add_argument('--runtime-config',type=Path,help='Explicit compact-only execution config; original recipe remains unchanged')
+    p.add_argument('--soak',action='store_true',help='Bounded 50/100-step stability diagnostic, never 1000 steps')
+    p.add_argument('--resume-50',action='store_true',help='Explicit new-process resume of a completed 50-step diagnostic')
     a=p.parse_args()
-    if not 1<=a.steps<=5: p.error('Only 1..5 diagnostic updates are allowed')
+    if a.soak:
+        if a.steps not in (50,100): p.error('Soak is exactly 50 or 100 steps')
+    elif not 1<=a.steps<=5: p.error('Only 1..5 diagnostic updates are allowed without --soak')
     run(a)

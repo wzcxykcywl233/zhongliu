@@ -43,9 +43,10 @@ def verify(root):
         rows.append({'kind':arm['kind'],'step_seconds':result['median_step_seconds'],
             'peak_allocated_mib':result['peak_allocated_mib'],'peak_reserved_mib':result['peak_reserved_mib']})
     proof={'complete':True,'runtime':RUNTIME,'result_sha256':hashes,'rows':rows,
-        'note':'Small GPU correctness and 60x128x4 synthetic memory gate. Not proof of end-to-end speed, full training headroom or official performance. Only three real diagnostic updates are permitted next.'}
+        'note':'Small GPU correctness and 60x128x4 synthetic memory gate. Not proof of end-to-end speed, full training headroom or official performance. Next stage is explicitly bounded; no automatic 1000-step training.',
+        'permitted_diagnostic_limit':100 if spec.get('CompactSoak') else 3}
     save_json(root/'compact-readiness.json',proof)
-    print('COMPACT GPU PROOF PASSED; only three real diagnostic updates permitted',flush=True)
+    print('COMPACT GPU PROOF PASSED; diagnostic limit='+str(proof['permitted_diagnostic_limit']),flush=True)
     return proof
 
 

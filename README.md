@@ -298,3 +298,16 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 [运行说明](cotracker-algorithm/experiments/SIDECAR_RUNTIME_DIAGNOSTICS.zh-CN.md)：`scripts/run_sidecar_runtime_diagnostics.ps1` 默认 `-Stage training`，只做 MLP/长 Mamba 各 3 步真实分阶段计时，保留原千步学习率计划。`-Stage profile` 为 11 组独立进程、每组 180 秒预算的合成微基准；`-Stage validation` 不再受加速门槛阻塞，固定原后端复用旧权重诊断 gain/修正上限。未启动新的千步训练；候选合格后显式 `-Stage test` 报告 38 例结果，旧目录保持不变。
 
 真实计时定位到 Mamba 反向显存超额压力后，新增[低显存扫描调整](cotracker-algorithm/experiments/SIDECAR_COMPACT_SCAN.zh-CN.md)：`scripts/repair_sidecar_scan_memory.ps1 -Stage proof` 先验证稀疏状态/解析反向，GPU 输出、梯度、P/V/C 和显存通过后显式 `-Stage training` 仅做 3 步计时。使用新目录 `sidecar-compact-scan-v4`，不重跑旧全尺寸 reference 高显存训练图，不启动千步训练。
+
+### 支线100步稳定性与独立退化诊断
+
+新入口 `scripts/run_sidecar_stability_and_degradation.ps1`，新目录 `protocol-40-10-38/sidecar-stability-v5`，不要与 v4 混用。按阶段显式运行：
+
+- `-Stage proof`：重新冻结当前源码/镜像/数据/权重，在新进程中做三组 compact GPU 正确性和显存证明。无需下载依赖。
+- `-Stage stability`：MLP、长 Mamba 分别连续100步，再另起目录做50步保存、退出进程、恢复到100步，共400次真实更新。学习率仍按原1000步计划，60帧/128点/4次迭代、硬标签、无辅助教师/掩膜损失不变。主干冻结审计与教师/病例/查询/视频配对必须通过。原训练文件不修改；计时和早停在内存中插入。
+- 每个进程预算1800秒；每个完成更新后检查已分配/预留峰值不超过20 GiB、驱动剩余至少2 GiB，保存后遇不合格即停止。不能预防单步中的瞬间OOM。第10–29与80–99步中位耗时比不超过2、常驻分配增长不超过256 MiB、峰值分配增长不超过1 GiB；越界要求复核，不直接断言泄漏。记录有限损失/梯度、裁剪前梯度范数和支线残差RMS。
+- 恢复检查：输入严格一致；模型/AdamW浮点状态 `rtol=1e-5, atol=1e-7`，整数、调度器、教师采样器、RNG等状态严格一致；另外报告是否全部逐值一致。不以序列化文件哈希差异判断数值等价。
+- `-Stage validation`：独立于稳定性结果，复用旧1000步权重、保持reference后端，只在10例验证集运行未训练参照，以及MLP/Mamba各三种子的原强度、0.5、0.25、0.5且修正上限0.5输入像素，共25个评估组。输出逐病例/队列的残差、轨迹位移、掩膜变化、DSC/D98等诊断。不会使用100步诊断权重。
+- `-Stage test`：仅验证集平均DSC不低于参照且D98下降不超过0.001的候选可进入38例报告，设置在种子间一致并冻结；需要显式执行，不因速度通过自动启动。测试集已反复观察，不宣称盲测。
+
+关键结果：`runtime/stability-summary.json`、`runtime/stability-summary.csv`、`degradation/validation-10/sidecar-safety-summary.csv`、`degradation/validation-10/sidecar-safety-case-diagnostics.csv`、`degradation/selection.json`。这些阶段没有新的1000步训练入口。部分进程失败时保留证据，换新的ResultsRoot重新验证，禁止把残缺探针拼成完成结果。

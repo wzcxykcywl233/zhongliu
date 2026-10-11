@@ -7,6 +7,7 @@ $NewRoot = Join-Path $TaskRoot 'new'
 New-Item -ItemType Directory -Force -Path "$FixtureRepo\scripts","$FixtureRepo\training-checkpoints","$FixtureRepo\cotracker-algorithm\resources","$OldRoot\train" | Out-Null
 $ActualRepo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Copy-Item -LiteralPath "$ActualRepo\scripts\experiment_local_runtimes.ps1" -Destination "$FixtureRepo\scripts\experiment_local_runtimes.ps1"
+Copy-Item -LiteralPath "$ActualRepo\scripts\sidecar_stability_tasks.ps1" -Destination "$FixtureRepo\scripts\sidecar_stability_tasks.ps1"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText("$FixtureRepo\cotracker-algorithm\resources\model.py",'loader fixture',$Utf8)
 function Save-Json($Path,$Value) { [IO.File]::WriteAllText($Path,(ConvertTo-Json -InputObject $Value -Depth 30),$Utf8) }
@@ -72,10 +73,18 @@ function global:docker {
         Save-Json (Join-Path $Folder 'result.json') @{complete=$true;kind=$Kind;runtime=@{backend=$Backend;point_chunk_size=$Chunk;gain=1;max_correction_pixels=0;checkpoint_blocks=$false}}
     }
     if ($args -contains '/opt/app/experiments/profile_sidecar_training_phases.py') {
-        if (-not ($args -contains '/usr/bin/timeout') -or -not ($args -contains '900s') -or -not ($args -contains '--steps') -or $args[[Array]::IndexOf($args,'--steps')+1] -ne '3') { throw 'Unbounded/wrong real diagnostic steps' }
+        $Count=[int]$args[[Array]::IndexOf($args,'--steps')+1]
+        if ($args -contains '--soak') {
+            if (-not ($args -contains '1800s') -or $Count -notin @(50,100) -or -not ($args -contains '--runtime-config')) { throw 'Unbounded soak / changed runtime' }
+        } elseif (-not ($args -contains '900s') -or $Count -ne 3) { throw 'Unbounded/wrong real diagnostic steps' }
+        if (-not ($args -contains '/usr/bin/timeout')) { throw 'Missing wall budget' }
         if (-not ($args -contains "type=bind,source=$global:DiagnosticTrainData,target=/data,readonly")) { throw 'Wrong data mount interpolation' }
         $Folder=([string](@($args | Where-Object { $_ -like '*target=/results' })[0])).Replace('type=bind,source=','').Replace(',target=/results','')
-        Save-Json (Join-Path $Folder 'phase-profile.json') @{complete=$true;diagnostic_steps=3;scheduler_num_steps=1000}
+        if ($args -contains '--resume-50') {
+            $Prior=Get-Content -LiteralPath (Join-Path $Folder 'phase-profile.json') -Raw | ConvertFrom-Json
+            if (-not $Prior.complete -or $Prior.diagnostic_steps -ne 50) { throw 'Resume without complete 50-step segment' }
+        }
+        Save-Json (Join-Path $Folder 'phase-profile.json') @{complete=$true;diagnostic_steps=$Count;scheduler_num_steps=1000}
     }
     if ($args -contains '/opt/app/experiments/verify_compact_scan_proof.py') {
         $Folder=([string](@($args | Where-Object { $_ -like '*target=/study' })[0])).Replace('type=bind,source=','').Replace(',target=/study','')
@@ -162,6 +171,21 @@ $CompactTraining=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/
 if ($CompactTraining.Count -ne 2 -or @($CompactTraining | Where-Object { $_ -notcontains '--runtime-config' }).Count) { throw 'Compact training did not pin runtime' }
 $PinnedRuntime=Get-Content -LiteralPath "$CompactRoot\compact-runtime.json" -Raw | ConvertFrom-Json
 if ($PinnedRuntime.backend -ne 'compact' -or $PinnedRuntime.gain -ne 1 -or $PinnedRuntime.max_correction_pixels -ne 0 -or $PinnedRuntime.checkpoint_blocks) { throw 'Training method was changed' }
+$SoakRoot=Join-Path $TaskRoot 'soak'
+$BeforeSoak=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' }).Count
+$Refused=$false
+try { & $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $SoakRoot -Stage training -CompactScan -CompactSoak -TrainingTimeoutSeconds 1800 } catch { $Refused=$true }
+if (-not $Refused -or @($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' }).Count -ne $BeforeSoak) { throw 'Soak before GPU proof' }
+& $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $SoakRoot -Stage profile -CompactScan -CompactSoak -TrainingTimeoutSeconds 1800
+& $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $SoakRoot -Stage training -CompactScan -CompactSoak -TrainingTimeoutSeconds 1800
+$SoakCalls=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' } | Select-Object -Skip $BeforeSoak)
+if ($SoakCalls.Count -ne 6 -or @($SoakCalls | Where-Object { $_ -contains '--resume-50' }).Count -ne 2) { throw 'Expected continuous100 / new-process50+50 for each kind' }
+& $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $SoakRoot -Stage training -CompactScan -CompactSoak -TrainingTimeoutSeconds 1800
+if (@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' }).Count -ne ($BeforeSoak+6)) { throw 'Completed soak repeated' }
+Save-Json "$SoakRoot\resumed\seed_0\mamba\phase-profile.json" @{complete=$false}
+$Refused=$false
+try { & $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $SoakRoot -Stage training -CompactScan -CompactSoak -TrainingTimeoutSeconds 1800 } catch { $Refused=$true }
+if (-not $Refused) { throw 'Partial soak mixed with completed segments' }
 [IO.File]::WriteAllText($Data[0].File,'changed',$Utf8)
 $Refused=$false
 try { & $Queue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $NewRoot -Stage profile } catch { $Refused=$true }

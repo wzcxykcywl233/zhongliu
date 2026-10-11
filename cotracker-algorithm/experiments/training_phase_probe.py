@@ -5,14 +5,16 @@ It does NOT change num_steps used by the optimizer/scheduler, losses or RNG.
 Synchronized timings are intrusive diagnostics, not production throughput.
 """
 import ast
+import math
 from contextlib import contextmanager
 import time
 import torch
 
 
 class PhaseProbe:
-    def __init__(self,limit):
+    def __init__(self,limit,monitor_health=False):
         self.limit=limit
+        self.monitor_health=monitor_health
         self.rows=[]; self.current=None; self.stack=[]; self.pending_data=0.
         self.outside_steps={}
         self.timing_errors=[]
@@ -86,6 +88,18 @@ class PhaseProbe:
             self.current['optimizer_updates']+=1
             self.current['next_step']=int(index)
 
+    def health(self,loss,optimizer):
+        if not self.monitor_health or self.current is None: return
+        gradients=[p.grad.detach() for group in optimizer.param_groups for p in group['params'] if p.grad is not None]
+        if not gradients: raise ValueError('Missing trainable gradients')
+        finite=bool(torch.isfinite(loss.detach()).all()) and all(bool(torch.isfinite(g).all()) for g in gradients)
+        norm=float(torch.stack([g.float().norm() for g in gradients]).norm()) if finite else None
+        finite=finite and math.isfinite(norm)
+        self.current.update(loss=float(loss.detach()) if bool(torch.isfinite(loss.detach()).all()) else None,gradients_finite=finite,
+            gradient_norm=norm if finite else None,
+            learning_rate=float(optimizer.param_groups[0]['lr']))
+        if not finite: raise ValueError('Nonfinite stability loss/gradient; preserve partial report')
+
     @contextmanager
     def installed(self):
         from cotracker.models.core.cotracker.feature_sidecar import FeatureSidecar
@@ -96,7 +110,13 @@ class PhaseProbe:
             if probe.current is not None:
                 probe.current['sidecar_frames']=hidden.shape[2]
                 probe.current['sidecar_points']=hidden.shape[1]
-            with probe.stage('sidecar_forward'): return residual(branch,hidden,rich)
+            with probe.stage('sidecar_forward'):
+                result=residual(branch,hidden,rich)
+                if probe.monitor_health and probe.current is not None:
+                    rms=float(result.detach().float().square().mean().sqrt())
+                    if not math.isfinite(rms): raise ValueError('Nonfinite sidecar residual; preserve partial report')
+                    probe.current['residual_rms_max']=max(rms,probe.current.get('residual_rms_max',0.))
+                return result
         def timed_next(iterator):
             start=time.perf_counter()
             try: return next_batch(iterator)
@@ -115,7 +135,7 @@ def call_name(node):
 
 
 class InstrumentTrainer(ast.NodeTransformer):
-    def __init__(self): self.function=''; self.counts={}
+    def __init__(self,resume_safe=False): self.function=''; self.counts={}; self.resume_safe=resume_safe
 
     def wrap(self,node,name):
         self.counts[name]=self.counts.get(name,0)+1
@@ -154,7 +174,12 @@ class InstrumentTrainer(ast.NodeTransformer):
         node=self.generic_visit(node)
         if self.function=='run' and ast.unparse(node.target)=='(i_batch, batch)':
             context=ast.Call(ast.Attribute(ast.Name('__probe__',ast.Load()),'step',ast.Load()),[ast.Name('total_steps',ast.Load())],[])
-            node.body=[ast.With([ast.withitem(context,None)],node.body)]
+            prefix=[]
+            if self.resume_safe:
+                if not isinstance(node.body[0],ast.If) or ast.unparse(node.body[0].test)!='epoch == resume_epoch and i_batch < resume_batch':
+                    raise ValueError('Unrecognized resume skip anchor')
+                prefix=[node.body.pop(0)]
+            node.body=prefix+[ast.With([ast.withitem(context,None)],node.body)]
             self.counts['training_step']=self.counts.get('training_step',0)+1
         elif self.function=='run' and ast.unparse(node.target)=='(k, v)' and ast.unparse(node.iter)=='output.items()':
             return self.wrap(node,'loss_or_logging_loop')
@@ -183,11 +208,16 @@ class InstrumentTrainer(ast.NodeTransformer):
                'scaler.unscale_':'optimizer_update','torch.nn.utils.clip_grad_norm_':'optimizer_update',
                'scaler.step':'optimizer_update','scheduler.step':'optimizer_update','scaler.update':'optimizer_update'}
         name=call_name(node.value)
+        if self.resume_safe and name=='torch.nn.utils.clip_grad_norm_':
+            health=ast.Expr(ast.Call(ast.Attribute(ast.Name('__probe__',ast.Load()),'health',ast.Load()),
+                [ast.Name('loss',ast.Load()),ast.Name('optimizer',ast.Load())],[]))
+            self.counts['health']=self.counts.get('health',0)+1
+            return [ast.copy_location(health,node),self.wrap(node,'optimizer_update')]
         return self.wrap(node,names[name]) if name in names else node
 
 
-def instrument(source,filename):
-    transform=InstrumentTrainer()
+def instrument(source,filename,resume_safe=False):
+    transform=InstrumentTrainer(resume_safe)
     tree=transform.visit(ast.parse(source,filename=filename))
     required={'teacher_forward':1,'student_forward':2,'training_step':1,'early_stop':2,
               'host_to_device':1,'forward_batch':1,'backward_total':1,'checkpoint_save':1}
