@@ -57,7 +57,7 @@ def parity(branch, model):
     return proof
 
 
-def benchmark(model, hidden, rich, runtime, warmup=1, repeats=3):
+def benchmark(model, hidden, rich, runtime, warmup=1, repeats=3, progress=None):
     branch = model.updateformer.feature_sidecar
     configure_sidecar_runtime(model,**runtime)
     branch.train()
@@ -67,6 +67,13 @@ def benchmark(model, hidden, rich, runtime, warmup=1, repeats=3):
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
+        free_before,total_memory = torch.cuda.mem_get_info()
+        allocated_before = torch.cuda.memory_allocated()
+        reserved_before = torch.cuda.memory_reserved()
+        if progress:
+            progress({'phase':'before_trial','trial':index,'warmup':index<warmup,
+                'allocated_mib':allocated_before/1048576,'reserved_mib':reserved_before/1048576,
+                'driver_free_mib':free_before/1048576,'driver_total_mib':total_memory/1048576})
         start = time.perf_counter()
         # Match four training iterations in the SAME graph, rather than hiding
         # activation-memory cost behind one forward/backward call.
@@ -83,11 +90,22 @@ def benchmark(model, hidden, rich, runtime, warmup=1, repeats=3):
         if index >= warmup:
             results.append({'forward_seconds':forward_end-start,'backward_seconds':backward_end-forward_end,
                             'optimizer_seconds':end-backward_end,'total_seconds':end-start,
-                            'peak_allocated_mib':torch.cuda.max_memory_allocated()/1048576})
+                            'peak_allocated_mib':torch.cuda.max_memory_allocated()/1048576,
+                            'peak_reserved_mib':torch.cuda.max_memory_reserved()/1048576,
+                            'allocated_before_mib':allocated_before/1048576,'reserved_before_mib':reserved_before/1048576,
+                            'driver_free_before_mib':free_before/1048576,'driver_free_after_mib':torch.cuda.mem_get_info()[0]/1048576,
+                            'driver_total_mib':total_memory/1048576})
         del predictions,loss
+        if progress:
+            progress({'phase':'completed_trial','trial':index,'warmup':index<warmup,
+                'forward_seconds':forward_end-start,'backward_seconds':backward_end-forward_end,
+                'optimizer_seconds':end-backward_end,'total_seconds':end-start,
+                'peak_allocated_mib':torch.cuda.max_memory_allocated()/1048576,
+                'peak_reserved_mib':torch.cuda.max_memory_reserved()/1048576})
     return {'runtime':runtime,'trials':results,
             'median_step_seconds':statistics.median(r['total_seconds'] for r in results),
-            'peak_allocated_mib':max(r['peak_allocated_mib'] for r in results)}
+            'peak_allocated_mib':max(r['peak_allocated_mib'] for r in results),
+            'peak_reserved_mib':max(r['peak_reserved_mib'] for r in results)}
 
 
 def profile(train, output, minimum_speedup, loader_sha256):

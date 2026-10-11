@@ -7,10 +7,21 @@ import SimpleITK as sitk
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'ext' / 'co-tracker'),str(ROOT / 'experiments')]
-from summarize_sidecar_speed_safety import choose_candidates, compare_caches, cohort_diagnostics
+from summarize_sidecar_speed_safety import choose_candidates, compare_caches, cohort_diagnostics, requires_scan_agreement
 
 
 class SafetySummaryTests(unittest.TestCase):
+    def test_independent_diagnosis_only_for_unchanged_backend(self):
+        self.assertTrue(requires_scan_agreement({'arms':[]}))
+        runtime={'backend':'reference','point_chunk_size':0,'checkpoint_blocks':False}
+        spec={'arms':[{'runtime':runtime}],'requires_scan_agreement':False}
+        self.assertFalse(requires_scan_agreement(spec))
+        for change in ({'backend':'parallel'},{'point_chunk_size':16},{'checkpoint_blocks':True}):
+            with self.assertRaisesRegex(ValueError,'unchanged reference'):
+                requires_scan_agreement({**spec,'arms':[{'runtime':{**runtime,**change}}]})
+        with self.assertRaisesRegex(ValueError,'Invalid scan'):
+            requires_scan_agreement({'requires_scan_agreement':'false','arms':[]})
+
     def test_cohort_diagnosis_collapses_seeds_not_extra_cases(self):
         rows=[]
         for seed in (0,1,2):

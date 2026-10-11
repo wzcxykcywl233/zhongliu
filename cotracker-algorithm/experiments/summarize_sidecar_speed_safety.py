@@ -72,6 +72,17 @@ def choose_candidates(rows):
     return selected
 
 
+def requires_scan_agreement(spec):
+    required = spec.get('requires_scan_agreement',True)
+    if not isinstance(required,bool): raise ValueError('Invalid scan agreement flag')
+    if not required:
+        for arm in spec['arms']:
+            runtime = arm['runtime']
+            if runtime['backend']!='reference' or runtime['point_chunk_size']!=0 or runtime['checkpoint_blocks']:
+                raise ValueError('Independent degradation diagnosis must use the unchanged reference backend')
+    return required
+
+
 def cohort_diagnostics(rows):
     # Collapse seeds within each case first. Seed repetitions are not extra
     # patients. Cohort IDs describe observed errors, never inference rules.
@@ -99,6 +110,7 @@ def cohort_diagnostics(rows):
 
 def summarize(root,split):
     spec = read_json(root / 'study-spec.json')
+    scan_required = requires_scan_agreement(spec)
     count = 10 if split=='validation-10' else 38
     arms = spec['arms']
     if split=='test-38':
@@ -131,7 +143,7 @@ def summarize(root,split):
                     'CorrectionMaxInputPixels':d['sidecar_applied_correction_max'],
                     'ClippedFraction':d['sidecar_clipped_corrections']/n,
                     **compare_caches(job,refjob)})
-            if split=='validation-10' and arm['name']=='mamba_full' and seed==0:
+            if scan_required and split=='validation-10' and arm['name']=='mamba_full' and seed==0:
                 shadow_arm = {'kind':'mamba','runtime':{'backend':'reference','point_chunk_size':0,'gain':1.,'max_correction_pixels':0.,'checkpoint_blocks':False}}
                 sfolder = root / split / 'seed_0' / 'mamba_reference'
                 _,scases,shash = load(sfolder,count,shadow_arm)
@@ -156,10 +168,13 @@ def summarize(root,split):
     write_csv(root / split / 'sidecar-safety-case-diagnostics.csv',cases)
     write_csv(root / split / 'sidecar-safety-cohort-diagnostics.csv',cohort_diagnostics(cases))
     if split=='validation-10':
-        write_csv(root / split / 'scan-backend-agreement.csv',backend_checks)
-        mean_error = abs(statistics.mean(r['Delta_DSC'] for r in backend_checks))
-        passed = mean_error<=1e-5 and max(abs(r['Delta_DSC']) for r in backend_checks)<=1e-4 and max(r['TrackMaxDisplacementInputPixels'] for r in backend_checks)<=.001
+        passed = True  # No backend intervention when scan_required is false.
+        if scan_required:
+            write_csv(root / split / 'scan-backend-agreement.csv',backend_checks)
+            mean_error = abs(statistics.mean(r['Delta_DSC'] for r in backend_checks))
+            passed = mean_error<=1e-5 and max(abs(r['Delta_DSC']) for r in backend_checks)<=1e-4 and max(r['TrackMaxDisplacementInputPixels'] for r in backend_checks)<=.001
         save_json(root / 'selection.json',{'selection_split':'validation-10','backend_agreement_passed':passed,
+                  'backend_agreement_required':scan_required,
                   'selected_arms':choose_candidates(summary) if passed else [],
                   'rule':'Same setting across all seeds. DSC mean >= frozen control, D98 delta >= -0.001; rank DSC, HD95, CD, D98. No test-case rule.'})
     save_json(root / split / 'safety-audit.json',{'complete':True,'split':split,'cases':count,'seeds':[0,1,2],'metrics_sha256':hashes,

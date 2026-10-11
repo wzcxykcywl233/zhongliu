@@ -292,3 +292,7 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 [CoTracker主干加深实验](cotracker-algorithm/experiments/BACKBONE_GROWTH.zh-CN.md)入口为 `scripts/run_backbone_growth_resumable.ps1`，包含同条件微调base（25.39M）、时间6层（30.70M）、时间/空间各6组（46.67M）及未微调参照。新增残差层零输出初始化并保留预训练三层顺序；默认三种子、每组1000步，结构化审计教师/病例/查询/视频配对。依次运行 `-Stage smoke`、`-Stage validation`、`-Stage test`，最终38例结果在 `protocol-40-10-38/backbone-growth-v1/test-38`。
 
 详细范围、对照、筛选规则和输出位置见 [参数复调协议](cotracker-algorithm/experiments/PARAMETER_RETUNE.zh-CN.md)。
+
+## 支线训练耗时与退化独立诊断
+
+[运行说明](cotracker-algorithm/experiments/SIDECAR_RUNTIME_DIAGNOSTICS.zh-CN.md)：`scripts/run_sidecar_runtime_diagnostics.ps1` 默认 `-Stage training`，只做 MLP/长 Mamba 各 3 步真实分阶段计时，保留原千步学习率计划。`-Stage profile` 为 11 组独立进程、每组 180 秒预算的合成微基准；`-Stage validation` 不再受加速门槛阻塞，固定原后端复用旧权重诊断 gain/修正上限。未启动新的千步训练；候选合格后显式 `-Stage test` 报告 38 例结果，旧目录保持不变。

@@ -4,9 +4,11 @@ param(
     [string]$TrainingResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\feature-sidecar-modefix-v3',
     [string]$ResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\sidecar-speed-safety-loadfix-v2',
     [ValidateSet('profile','smoke','validation','test')][string]$Stage = 'profile',
-    [ValidateRange(1.01,100)][double]$MinimumSpeedup = 2
+    [ValidateRange(1.01,100)][double]$MinimumSpeedup = 2,
+    [switch]$ReferenceDiagnosisOnly
 )
 $ErrorActionPreference = 'Stop'
+if ($ReferenceDiagnosisOnly -and $Stage -notin @('validation','test')) { throw 'Reference diagnosis is validation/test only; use the runtime diagnostic queue for timing.' }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $TrainingResultsRoot = (Resolve-Path -LiteralPath $TrainingResultsRoot).Path.TrimEnd('\')
 $ResultsRoot = [IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
@@ -49,7 +51,7 @@ try {
     Write-FrozenJson (Join-Path $ResultsRoot 'frozen-study.json') ([ordered]@{Schema=1;Source=$Source;TrainingResultsRoot=$TrainingResultsRoot;
         OldProtocolSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'frozen-run.json')).Hash;
         OldTrainingAuditSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'train\training-audit.json')).Hash;
-        Images=$OldImages;MinimumSpeedup=$MinimumSpeedup;Gains=@(1,.5,.25);CapInputPixels=.5;
+        Images=$OldImages;MinimumSpeedup=$MinimumSpeedup;ReferenceDiagnosisOnly=[bool]$ReferenceDiagnosisOnly;Gains=@(1,.5,.25);CapInputPixels=.5;
         Selection='validation-10: DSC mean >= pretrained and D98 delta >= -0.001; DSC/HD95/CD/D98 ranking';
         ScanAgreementMeanDSC=0.00001;ScanAgreementMaxCaseDSC=0.0001;ScanAgreementMaxTrackPixels=0.001})
     Start-Transcript -Path (Join-Path $ResultsRoot 'queue.log') -Append | Out-Null
@@ -74,6 +76,10 @@ try {
         Write-Host "Profile complete. Inspect $ProfilePath before any new large training."
         return
     }
+    if ($ReferenceDiagnosisOnly) {
+        $Runtime = [ordered]@{backend='reference';point_chunk_size=0;gain=1;max_correction_pixels=0;checkpoint_blocks=$false}
+        Write-Host 'Independent degradation diagnosis: old weights, unchanged reference backend; no speed gate or new training.'
+    } else {
     $Profile = Get-Content -LiteralPath $ProfilePath -Raw | ConvertFrom-Json
     if ($Profile.checkpoint_loader.sha256 -ne $LoaderSHA256) { throw 'Speed profile used a different checkpoint loader. Preserve results and use a new root.' }
     if (-not $Profile.complete -or -not $Profile.selected -or $Profile.selected.measured_speedup -lt $MinimumSpeedup) {
@@ -101,6 +107,7 @@ try {
     foreach ($Property in $SmokeAudit.final_checkpoints_sha256.PSObject.Properties) {
         if ((Get-FileHash -LiteralPath (Join-Path $SmokeRoot ('train\'+$Property.Name))).Hash -ne $Property.Value) { throw 'Accelerated smoke checkpoints changed.' }
     }
+    }
     $Arms=@()
     foreach ($Kind in @('mlp','mamba')) {
         foreach ($Variant in @(@{Suffix='full';Gain=1;Cap=0},@{Suffix='gain050';Gain=.5;Cap=0},@{Suffix='gain025';Gain=.25;Cap=0},@{Suffix='gain050_cap05';Gain=.5;Cap=.5})) {
@@ -111,7 +118,7 @@ try {
             $Arms += [ordered]@{name=$Name;kind=$Kind;runtime=$Setting}
         }
     }
-    Write-FrozenJson (Join-Path $ResultsRoot 'study-spec.json') ([ordered]@{arms=$Arms;seeds=@(0,1,2);profile=$Old.InferenceProfile})
+    Write-FrozenJson (Join-Path $ResultsRoot 'study-spec.json') ([ordered]@{arms=$Arms;seeds=@(0,1,2);profile=$Old.InferenceProfile;requires_scan_agreement=(-not [bool]$ReferenceDiagnosisOnly)})
     $Split=if ($Stage -eq 'test') {'test-38'} else {'validation-10'}
     if ($Stage -eq 'test') {
         $Validation=Get-Content -LiteralPath (Join-Path $ResultsRoot 'validation-10\safety-audit.json') -Raw | ConvertFrom-Json
@@ -130,7 +137,7 @@ try {
     & $Runner -Repository $RepoRoot -Dataset $Datasets[$Split] -Results (Join-Path $ResultsRoot "$Split\pretrained") `
         -Profiles @($Old.InferenceProfile) -ModelCheckpoint (Join-Path $TrainingResultsRoot 'pretrained-frozen.pth') `
         -RequireDiagnostics -SidecarTrackCache -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned
-    if ($Stage -eq 'validation') {
+    if ($Stage -eq 'validation' -and -not $ReferenceDiagnosisOnly) {
         $Shadow=Join-Path $ResultsRoot 'mamba_reference-runtime.json'
         Write-FrozenJson $Shadow ([ordered]@{backend='reference';point_chunk_size=0;gain=1;max_correction_pixels=0;checkpoint_blocks=$false})
         & $Runner -Repository $RepoRoot -Dataset $Datasets[$Split] -Results (Join-Path $ResultsRoot "$Split\seed_0\mamba_reference") `

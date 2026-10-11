@@ -112,7 +112,9 @@ print('REAL ENTRY CHECKPOINT RELOAD PASSED')
     def test_new_model_code_cannot_reuse_import_only_migration(self):
         current = [{'File':p,'SHA256':file_sha(ROOT.parent / p)} for p in KNOWN_OLD]
         old = {'Source':[{'File':p,'SHA256':v} for p,v in KNOWN_OLD.items()]}
-        with self.assertRaisesRegex(ValueError,'additional numerical changes'):
+        # New audit signatures can fail even earlier than the numerical hash
+        # check. Both refusals preserve the old import-only allowlist.
+        with self.assertRaisesRegex(ValueError,'additional numerical changes|not the reviewed edit'):
             verify_sources(old,current,ROOT.parent)
 
     def test_allowlisted_file_does_not_allow_extra_numerical_changes(self):

@@ -13,12 +13,15 @@ from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOff
 from cotracker.models.core.cotracker.backbone_growth import save_json
 
 
-def audit(root, seeds, steps, output=None):
+def audit(root, seeds, steps, output=None, kinds=None):
+    selected_kinds = KINDS if kinds is None else tuple(kinds)
+    if not selected_kinds or len(set(selected_kinds)) != len(selected_kinds) or any(k not in KINDS for k in selected_kinds):
+        raise ValueError('Invalid audit kinds')
     proofs, hashes = [], {}
     torch.set_num_threads(1)
     for seed in seeds:
         reference, reference_config, base_sha, short_initial = None, None, None, None
-        for kind in KINDS:
+        for kind in selected_kinds:
             folder = root / f'seed_{seed}' / kind
             init = json.loads((folder / 'initialization-report.json').read_text())
             info = init['sidecar']
@@ -34,7 +37,7 @@ def audit(root, seeds, steps, output=None):
                 raise ValueError('starting base differs between arms')
             if kind == 'mamba_short':
                 short_initial = info['initial_sidecar_sha256']
-            if kind == 'mamba' and info['initial_sidecar_sha256'] != short_initial:
+            if kind == 'mamba' and 'mamba_short' in selected_kinds and info['initial_sidecar_sha256'] != short_initial:
                 raise ValueError('long/short Mamba starting branch weights differ')
             rows = records(folder / 'paired-steps.jsonl', steps, 'base')
             config = json.loads((folder / 'run-config.json').read_text(encoding='utf-8-sig'))
@@ -75,5 +78,6 @@ if __name__ == '__main__':
     p.add_argument('--root', type=Path, required=True)
     p.add_argument('--seeds', required=True)
     p.add_argument('--steps', type=int, required=True)
+    p.add_argument('--kinds', help='Optional explicit subset; default still audits all four original arms')
     a = p.parse_args()
-    audit(a.root, [int(x) for x in a.seeds.split(',')], a.steps)
+    audit(a.root, [int(x) for x in a.seeds.split(',')], a.steps, kinds=a.kinds.split(',') if a.kinds else None)
