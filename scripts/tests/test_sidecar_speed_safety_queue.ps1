@@ -4,10 +4,11 @@ $TaskRoot = Join-Path ([IO.Path]::GetTempPath()) ('sidecar-speed-test-' + [guid]
 $FixtureRepo = Join-Path $TaskRoot 'repo'
 $OldRoot = Join-Path $TaskRoot 'old'
 $NewRoot = Join-Path $TaskRoot 'new'
-New-Item -ItemType Directory -Force -Path "$FixtureRepo\scripts","$FixtureRepo\training-checkpoints","$OldRoot\train" | Out-Null
+New-Item -ItemType Directory -Force -Path "$FixtureRepo\scripts","$FixtureRepo\training-checkpoints","$FixtureRepo\cotracker-algorithm\resources","$OldRoot\train" | Out-Null
 $ActualRepo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Copy-Item -LiteralPath "$ActualRepo\scripts\experiment_local_runtimes.ps1" -Destination "$FixtureRepo\scripts\experiment_local_runtimes.ps1"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText("$FixtureRepo\cotracker-algorithm\resources\model.py",'loader fixture',$Utf8)
 function Save-Json($Path,$Value) { [IO.File]::WriteAllText($Path,(ConvertTo-Json -InputObject $Value -Depth 30),$Utf8) }
 $Data = @()
 foreach ($Split in @(@{Name='train-40';Count=40},@{Name='validation-10';Count=10},@{Name='test-38';Count=38})) {
@@ -56,7 +57,9 @@ function global:docker {
     $global:LASTEXITCODE=0
     if ($args[0] -eq 'image') { return ('sha256:' + ('a'*64)) }
     if ($args -contains '/opt/app/experiments/profile_sidecar_speed.py') {
-        $Profile=@{complete=$true;selected=@{measured_speedup=4;runtime=@{backend='parallel';point_chunk_size=16;gain=1;max_correction_pixels=0;checkpoint_blocks=$true}};source_checkpoints_sha256=@{}}
+        $LoaderIndex=[Array]::IndexOf($args,'--loader-sha256')
+        if ($LoaderIndex -lt 0) { throw 'No real loader hash provided to GPU profile' }
+        $Profile=@{complete=$true;checkpoint_loader=@{sha256=$args[$LoaderIndex+1]};selected=@{measured_speedup=4;runtime=@{backend='parallel';point_chunk_size=16;gain=1;max_correction_pixels=0;checkpoint_blocks=$true}};source_checkpoints_sha256=@{}}
         [IO.File]::WriteAllText("$global:SpeedTestOutput\speed-profile.json",(ConvertTo-Json $Profile -Depth 10),(New-Object System.Text.UTF8Encoding($false)))
     }
 }

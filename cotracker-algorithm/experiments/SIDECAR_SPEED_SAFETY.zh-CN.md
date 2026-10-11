@@ -51,7 +51,9 @@ smoke再执行四种支线各5步**真实40例训练加载器/教师/完整CoTra
 
 ## 5. 远程入口
 
-旧feature-sidecar-modefix-v3训练与feature-sidecar-inferencefix-v4报告不动。当前新源码不属于旧import-only恢复白名单，**不要重跑旧repair_feature_sidecar_inference.ps1，更不能删除其指纹**。新根为 `protocol-40-10-38\sidecar-speed-safety-v1`。旧训练只读挂载，校验完整配对、权重、原训练器以及40/10/38数据文件哈希。复用原镜像环境，不联网安装新依赖。
+旧feature-sidecar-modefix-v3训练与feature-sidecar-inferencefix-v4报告不动。当前新源码不属于旧import-only恢复白名单，**不要重跑旧repair_feature_sidecar_inference.ps1，更不能删除其指纹**。新根为 `protocol-40-10-38\sidecar-speed-safety-loadfix-v2`。旧训练只读挂载，校验完整配对、权重、原训练器以及40/10/38数据文件哈希。复用原镜像环境，不联网安装新依赖。
+
+loadfix-v2修复训练环境复用镜像漏复制resources及根目录Python模块的问题：旧加载器不认识feature_sidecar元数据，会直接以无支线模型加载包含支线的权重。现在同时复制当前加载器及依赖；测速前验证其实际导入路径和仓库SHA256，依然严格加载所有参数，不用strict=False或删掉支线键。旧sidecar-speed-safety-v1目录保留，不删除指纹、不混用已固定的旧镜像；当前默认新根重新复制代码，**不重新训练**。
 
 ```powershell
 git -C "C:\zhongliu\zhongliu-tuning" pull --ff-only origin main

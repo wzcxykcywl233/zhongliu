@@ -2,7 +2,7 @@
 param(
     [string]$RepoRoot = 'C:\zhongliu\zhongliu-tuning',
     [string]$TrainingResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\feature-sidecar-modefix-v3',
-    [string]$ResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\sidecar-speed-safety-v1',
+    [string]$ResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\sidecar-speed-safety-loadfix-v2',
     [ValidateSet('profile','smoke','validation','test')][string]$Stage = 'profile',
     [ValidateRange(1.01,100)][double]$MinimumSpeedup = 2
 )
@@ -62,18 +62,20 @@ try {
         '--mount',"type=bind,source=$ResultsRoot,target=/study",'--entrypoint','/opt/app/.pixi/envs/training/bin/python',
         $Images.Training,'/opt/app/experiments/audit_sidecar_speed_source.py','--old','/previous','--new','/study','--repo','/source') (Join-Path $ResultsRoot 'source-audit.log')
     $ProfilePath=Join-Path $ResultsRoot 'speed-profile.json'
+    $LoaderSHA256=(Get-FileHash -LiteralPath (Join-Path $RepoRoot 'cotracker-algorithm\resources\model.py')).Hash.ToLowerInvariant()
     if ($Stage -eq 'profile') {
         if (-not (Test-Path -LiteralPath $ProfilePath)) {
             Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--gpus','device=0',
                 '--mount',"type=bind,source=$TrainingResultsRoot\train,target=/training,readonly",
                 '--mount',"type=bind,source=$ResultsRoot,target=/study",'--entrypoint','/opt/app/.pixi/envs/training/bin/python',
                 $Images.Training,'/opt/app/experiments/profile_sidecar_speed.py','--train','/training','--output','/study/speed-profile.json',
-                '--minimum-speedup',([string]$MinimumSpeedup)) (Join-Path $ResultsRoot 'speed-profile.log')
+                '--minimum-speedup',([string]$MinimumSpeedup),'--loader-sha256',$LoaderSHA256) (Join-Path $ResultsRoot 'speed-profile.log')
         }
         Write-Host "Profile complete. Inspect $ProfilePath before any new large training."
         return
     }
     $Profile = Get-Content -LiteralPath $ProfilePath -Raw | ConvertFrom-Json
+    if ($Profile.checkpoint_loader.sha256 -ne $LoaderSHA256) { throw 'Speed profile used a different checkpoint loader. Preserve results and use a new root.' }
     if (-not $Profile.complete -or -not $Profile.selected -or $Profile.selected.measured_speedup -lt $MinimumSpeedup) {
         throw 'No verified sufficiently faster backend. Do not start another large training/evaluation queue; share speed-profile.json.'
     }

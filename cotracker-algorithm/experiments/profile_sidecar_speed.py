@@ -11,10 +11,26 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT),str(ROOT / 'ext' / 'co-tracker'),str(Path(__file__).parent)]
+from local_cotracker_source import activate_local_cotracker
+activate_local_cotracker()
 from audit_backbone_growth import file_sha
 from cotracker.models.core.cotracker.feature_sidecar import configure_sidecar_runtime
 from cotracker.models.core.cotracker.backbone_growth import save_json
-from resources.model import setup_model
+import resources.model as checkpoint_loader
+
+
+def load_profile_model(path, kind, device, loader_sha256):
+    expected_path = (ROOT / 'resources' / 'model.py').resolve()
+    actual_path = Path(checkpoint_loader.__file__).resolve()
+    if actual_path != expected_path or file_sha(actual_path) != loader_sha256.lower():
+        raise ValueError('Stale checkpoint loader: ' + str(actual_path) +
+                         '. Build the current code-copy training image in a NEW results root.')
+    if os.environ.get('COTRACKER_CHECKPOINT'):
+        raise ValueError('Profile must use named source checkpoints, not an environment override')
+    model = checkpoint_loader.setup_model(str(path),device=device)
+    if getattr(model,'feature_sidecar_kind',None)!=kind or not getattr(model,'frozen_pretrained',False):
+        raise ValueError('Wrong loaded source architecture')
+    return model
 
 
 def parity(branch, model):
@@ -74,7 +90,7 @@ def benchmark(model, hidden, rich, runtime, warmup=1, repeats=3):
             'peak_allocated_mib':max(r['peak_allocated_mib'] for r in results)}
 
 
-def profile(train, output, minimum_speedup):
+def profile(train, output, minimum_speedup, loader_sha256):
     if not torch.cuda.is_available(): raise ValueError('GPU profile requires CUDA')
     if os.environ.get('COTRACKER_CHECKPOINT'): raise ValueError('Profile must use named source checkpoints, not an environment override')
     torch.manual_seed(20261011)
@@ -82,9 +98,8 @@ def profile(train, output, minimum_speedup):
     selected = None
     for kind in ('mlp','mamba_short','mamba'):
         path = train / 'seed_0' / kind / 'cotracker_three_final.pth'
-        model = setup_model(str(path),device='cuda')
-        if model.feature_sidecar_kind!=kind or not model.frozen_pretrained:
-            raise ValueError('Wrong loaded source architecture')
+        print('CHECKPOINT LOADER '+str(checkpoint_loader.__file__),flush=True)
+        model = load_profile_model(path,kind,'cuda',loader_sha256)
         branch = model.updateformer.feature_sidecar
         evidence[str(path.relative_to(train))] = file_sha(path)
         initial = {n:v.detach().clone() for n,v in branch.state_dict().items()}
@@ -126,6 +141,7 @@ def profile(train, output, minimum_speedup):
     summary = {'complete':True,'device':torch.cuda.get_device_name(),'torch':torch.__version__,
                'shape':{'frames':60,'points':128,'iterations_in_one_graph':4},'minimum_speedup':minimum_speedup,
                'selected':selected,'records':records,'source_checkpoints_sha256':evidence,
+               'checkpoint_loader':{'path':str(checkpoint_loader.__file__),'sha256':loader_sha256.lower()},
                'note':'Synthetic rich-feature TRAINING microbenchmark: forward+backward+AdamW. Excludes teacher, CNN/Transformer, I/O, logging and checkpoint saves. Not an end-to-end speed guarantee or official Mamba kernel benchmark.'}
     save_json(output,summary)
     print('PROFILE COMPLETE '+str(output),flush=True)
@@ -136,5 +152,6 @@ if __name__ == '__main__':
     p.add_argument('--train',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--minimum-speedup',type=float,default=2.)
+    p.add_argument('--loader-sha256',required=True)
     a = p.parse_args()
-    profile(a.train,a.output,a.minimum_speedup)
+    profile(a.train,a.output,a.minimum_speedup,a.loader_sha256)
