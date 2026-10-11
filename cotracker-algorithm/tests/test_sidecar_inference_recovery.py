@@ -16,6 +16,13 @@ from audit_backbone_growth import file_sha
 from local_cotracker_source import activate_local_cotracker
 
 
+def reviewed_text(relative):
+    # The import-only recovery is frozen at 6992fb8. New speed/model code must
+    # NOT silently qualify for that migration. Test its original source fixture.
+    return subprocess.check_output(['git','-c','safe.directory='+str(ROOT.parent),
+        '-C',str(ROOT.parent),'show','6992fb8:'+relative],text=True,encoding='utf-8')
+
+
 class InferenceRecoveryTests(unittest.TestCase):
     def test_actual_model_entry_with_stale_site_package_first(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -83,20 +90,30 @@ print('REAL ENTRY CHECKPOINT RELOAD PASSED')
         paths = set(KNOWN_OLD) | ADDED | {'cotracker-algorithm/ext/co-tracker/train_on_real_data.py',
             'cotracker-algorithm/ext/co-tracker/cotracker/models/core/cotracker/feature_sidecar.py',
             'cotracker-algorithm/resources/model.py'}
-        current = [{'File':p,'SHA256':file_sha(ROOT.parent / p)} for p in sorted(paths)]
-        old = {'Source':[{'File':r['File'],'SHA256':KNOWN_OLD.get(r['File'],r['SHA256'])}
-                         for r in current if r['File'] not in ADDED]}
-        self.assertEqual(verify_sources(old,current,ROOT.parent),sorted(KNOWN_OLD))
-        modified = json.loads(json.dumps(old))
-        next(r for r in modified['Source'] if r['File'].endswith('/train_on_real_data.py'))['SHA256'] = '0'*64
-        with self.assertRaisesRegex(ValueError,'model/training/protocol'):
-            verify_sources(modified,current,ROOT.parent)
-        modified = json.loads(json.dumps(old))
-        next(r for r in modified['Source'] if r['File']=='cotracker-algorithm/model.py')['SHA256'] = '0'*64
-        with self.assertRaisesRegex(ValueError,'unrecognized old'):
-            verify_sources(modified,current,ROOT.parent)
-        with self.assertRaisesRegex(ValueError,'added/deleted'):
-            verify_sources(old,current + [{'File':'scripts/unrelated.py','SHA256':'0'*64}],ROOT.parent)
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            for relative in paths:
+                path = repo / relative
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text(reviewed_text(relative),encoding='utf-8')
+            current = [{'File':p,'SHA256':file_sha(repo / p)} for p in sorted(paths)]
+            old = {'Source':[{'File':r['File'],'SHA256':KNOWN_OLD.get(r['File'],r['SHA256'])}
+                             for r in current if r['File'] not in ADDED]}
+            self.assertEqual(verify_sources(old,current,repo),sorted(KNOWN_OLD))
+            modified = json.loads(json.dumps(old))
+            next(r for r in modified['Source'] if r['File'].endswith('/train_on_real_data.py'))['SHA256'] = '0'*64
+            with self.assertRaisesRegex(ValueError,'model/training/protocol'): verify_sources(modified,current,repo)
+            modified = json.loads(json.dumps(old))
+            next(r for r in modified['Source'] if r['File']=='cotracker-algorithm/model.py')['SHA256'] = '0'*64
+            with self.assertRaisesRegex(ValueError,'unrecognized old'): verify_sources(modified,current,repo)
+            with self.assertRaisesRegex(ValueError,'added/deleted'):
+                verify_sources(old,current + [{'File':'scripts/unrelated.py','SHA256':'0'*64}],repo)
+
+    def test_new_model_code_cannot_reuse_import_only_migration(self):
+        current = [{'File':p,'SHA256':file_sha(ROOT.parent / p)} for p in KNOWN_OLD]
+        old = {'Source':[{'File':p,'SHA256':v} for p,v in KNOWN_OLD.items()]}
+        with self.assertRaisesRegex(ValueError,'additional numerical changes'):
+            verify_sources(old,current,ROOT.parent)
 
     def test_allowlisted_file_does_not_allow_extra_numerical_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,7 +122,7 @@ print('REAL ENTRY CHECKPOINT RELOAD PASSED')
             for relative, digest in KNOWN_OLD.items():
                 target = repo / relative
                 target.parent.mkdir(parents=True,exist_ok=True)
-                text = (ROOT.parent / relative).read_text(encoding='utf-8')
+                text = reviewed_text(relative)
                 if relative == 'cotracker-algorithm/model.py':
                     text += '\n# An unrelated additional change must still be rejected.\n'
                 target.write_text(text,encoding='utf-8')
@@ -121,7 +138,7 @@ print('REAL ENTRY CHECKPOINT RELOAD PASSED')
             for relative, digest in KNOWN_OLD.items():
                 target = repo / relative
                 target.parent.mkdir(parents=True,exist_ok=True)
-                text = (ROOT.parent / relative).read_text(encoding='utf-8')
+                text = reviewed_text(relative)
                 if relative.endswith('Dockerfile.inference.reuse'):
                     original = text
                     for new, old in REVERSE_EDITS[relative]: original = original.replace(new,old)

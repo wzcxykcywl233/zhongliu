@@ -9,6 +9,7 @@ param(
     [ValidateRange(1,100000)][int]$NumSteps = 1000,
     [ValidateRange(1,10000)][int]$SaveEverySteps = 25,
     [string]$Seeds = '0,1,2',
+    [string]$SidecarRuntimeConfig = '',
     [string]$TrainingRuntimeImage = 'trackrad-cotracker-backbone-growth:latest',
     [string]$InferenceRuntimeImage = 'trackrad-algorithm-cotracker-algorithm:latest'
 )
@@ -75,6 +76,13 @@ $Protocol = [ordered]@{
     SequenceLength=60; Trajectories=128; TrainIterations=4; LearningRate=0.00005
     AuxiliaryTeacherWeight=0; MaskLossWeight=0; ConfidenceTarget='hard'; InferenceProfile=$InferenceProfile
 }
+if ($SidecarRuntimeConfig) {
+    $SidecarRuntimeConfig = (Resolve-Path -LiteralPath $SidecarRuntimeConfig).Path
+    $Runtime = Get-Content -LiteralPath $SidecarRuntimeConfig -Raw | ConvertFrom-Json
+    if ($Runtime.gain -ne 1 -or $Runtime.max_correction_pixels -ne 0) { throw 'Training acceleration must not change residual gain or cap.' }
+    $Protocol.SidecarRuntime = $Runtime
+    $Protocol.SidecarRuntimeSHA256 = (Get-FileHash -LiteralPath $SidecarRuntimeConfig -Algorithm SHA256).Hash
+}
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Force -Path $ResultsRoot | Out-Null
 $Lock = [IO.File]::Open((Join-Path $ResultsRoot '.sidecar.lock'),'OpenOrCreate','ReadWrite','None')
@@ -84,6 +92,14 @@ function Write-AtomicJson([string]$Path, $Value) {
     Move-Item -LiteralPath "$Path.tmp" -Destination $Path -Force
 }
 function Invoke-DockerLogged([string[]]$Arguments, [string]$Log) {
+    if ($SidecarRuntimeConfig -and $Arguments -contains '--feature_sidecar') {
+        $ImageIndex = [Array]::IndexOf($Arguments, $TrainingImageId)
+        if ($ImageIndex -lt 1) { throw 'Cannot pin the training runtime config.' }
+        $Arguments = @($Arguments[0..($ImageIndex-1)] +
+            @('--env','TRACKRAD_SIDECAR_RUNTIME=/opt/sidecar/runtime.json',
+              '--mount',"type=bind,source=$SidecarRuntimeConfig,target=/opt/sidecar/runtime.json,readonly") +
+            $Arguments[$ImageIndex..($Arguments.Count-1)])
+    }
     $Previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -135,6 +151,7 @@ try {
                     sequence_len=60; traj_per_sample=128; train_iters=4; lr=0.00005
                     auxiliary_teacher_weight=0; confidence_target_mode='hard'; mask_loss_weight=0
                 }
+                if ($SidecarRuntimeConfig) { $Config.sidecar_runtime = $Runtime }
                 $ConfigPath = Join-Path $Folder 'run-config.json'
                 if (Test-Path -LiteralPath $ConfigPath) {
                     if ([IO.File]::ReadAllText($ConfigPath) -ne (ConvertTo-Json -InputObject $Config -Depth 100)) { throw 'Training config differs from checkpoint.' }

@@ -38,6 +38,8 @@ def audit(root, seeds, steps, output=None):
                 raise ValueError('long/short Mamba starting branch weights differ')
             rows = records(folder / 'paired-steps.jsonl', steps, 'base')
             config = json.loads((folder / 'run-config.json').read_text(encoding='utf-8-sig'))
+            if 'sidecar_runtime' in config and info.get('execution_runtime') != config['sidecar_runtime']:
+                raise ValueError('executed sidecar runtime differs from training config: ' + str(folder))
             common = {k:v for k,v in config.items() if k not in ('kind', 'profile')}
             if reference is None:
                 reference, reference_config = rows, common

@@ -10,6 +10,15 @@ while freezing all pretrained CoTracker tensors. Local Docker runtimes are reuse
 without downloading dependencies. See [design, controls and commands](cotracker-algorithm/experiments/ANCHOR_AND_FEATURE_SIDECAR.zh-CN.md).
 Only test-38 official metrics belong in the final performance table.
 
+### Sidecar speed, degradation controls and diagnosis
+
+The separate `scripts/run_sidecar_speed_safety_resumable.ps1` study starts with
+`-Stage profile`, not another 1000-step training run. It benchmarks an equivalent
+parallel scan and backward on the remote GPU, then gates a real 5-step smoke.
+Validation reuses completed weights to test residual gains and a coordinate
+correction cap; test-38 requires a frozen validation-qualified selection.
+Old training/results remain read-only. See [scope, guards and commands](cotracker-algorithm/experiments/SIDECAR_SPEED_SAFETY.zh-CN.md).
+
 ### Six independent query-memory refinements
 
 Run `scripts/run_memory_refinement_resumable.ps1` for the diverse-memory control

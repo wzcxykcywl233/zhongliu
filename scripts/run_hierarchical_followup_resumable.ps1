@@ -14,6 +14,8 @@ param(
     [switch]$PointDecoupling,
     [string]$ReferenceImagesPath = '',
     [string]$ModelCheckpoint = "",
+    [string]$SidecarRuntimeConfig = "",
+    [switch]$SidecarTrackCache,
     [string]$FusionGateCheckpoint = ""
 )
 
@@ -281,6 +283,21 @@ try {
                         @("--env", "TRACKRAD_DIAGNOSTICS=1") +
                         $DockerArguments[$ImageIndex]
                     )
+                }
+                if ($SidecarRuntimeConfig) {
+                    if (-not $RequireDiagnostics) { throw 'Sidecar runtime overrides require diagnostics.' }
+                    $ImageIndex = $DockerArguments.Count - 1
+                    $DockerArguments = @($DockerArguments[0..($ImageIndex - 1)] +
+                        @('--env','TRACKRAD_SIDECAR_RUNTIME=/opt/sidecar/runtime.json',
+                          '--mount',"type=bind,source=$SidecarRuntimeConfig,target=/opt/sidecar/runtime.json,readonly") +
+                        $DockerArguments[$ImageIndex])
+                }
+                if ($SidecarTrackCache) {
+                    if (-not $RequireDiagnostics) { throw 'Sidecar track cache requires diagnostics.' }
+                    $ImageIndex = $DockerArguments.Count - 1
+                    $DockerArguments = @($DockerArguments[0..($ImageIndex - 1)] +
+                        @('--env','TRACKRAD_SIDECAR_TRACK_CACHE=/output/sidecar-tracks.npz') +
+                        $DockerArguments[$ImageIndex])
                 }
                 if ($PointDecoupling) {
                     $ImageIndex = $DockerArguments.Count - 1

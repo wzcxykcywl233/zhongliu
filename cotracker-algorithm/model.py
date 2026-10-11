@@ -115,6 +115,7 @@ def run_algorithm(
         }
         if hasattr(model, 'feature_sidecar_kind'):
             diagnostics['model']['feature_sidecar'] = model.feature_sidecar_kind
+            diagnostics['model']['sidecar_runtime'] = model.updateformer.feature_sidecar.runtime
             model.updateformer.feature_sidecar.diagnostics = numeric_diagnostics
         if getattr(model, 'frozen_pretrained', False):
             diagnostics['model']['frozen_pretrained'] = True
@@ -280,6 +281,14 @@ def run_algorithm(
             tracking.trajectories,
             config.temporal_median_window,
         )
+        trace_path = os.environ.get('TRACKRAD_SIDECAR_TRACK_CACHE')
+        if trace_path:
+            if not diagnostics_enabled:
+                raise ValueError('sidecar track cache requires diagnostics')
+            np.savez_compressed(trace_path, trajectories=trajectories.detach().cpu().numpy(),
+                                visibility=tracking.visibility.detach().cpu().numpy(),
+                                confidence=tracking.confidence.detach().cpu().numpy(),
+                                queries=queries.detach().cpu().numpy())
         if numeric_diagnostics is not None:
             smoothing_distance = torch.linalg.vector_norm(
                 trajectories - tracking.trajectories,

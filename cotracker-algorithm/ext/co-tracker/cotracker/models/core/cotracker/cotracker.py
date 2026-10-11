@@ -533,7 +533,7 @@ class EfficientUpdateFormer(nn.Module):
             residual = self.feature_sidecar.residual(base_tokens, input_tensor)
             # Linearity gives W(H+dH)+b = WH+b+WdH. Keep the original tensor
             # strides/GEMM path, so zero initialization is BITWISE identical.
-            flow = flow + torch.nn.functional.linear(residual, self.flow_head.weight)
+            flow = flow + self.feature_sidecar.correction(residual, self.flow_head.weight)
         if self.linear_layer_for_vis_conf:
             vis_conf = self.vis_conf_head(base_tokens)
             flow = torch.cat([flow, vis_conf], dim=-1)

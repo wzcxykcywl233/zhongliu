@@ -5,6 +5,8 @@ kernels. States are independent across points, clips and refinement iterations.
 """
 import hashlib
 import math
+import os
+import json
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -25,6 +27,8 @@ class SelectiveScan(nn.Module):
         self.skip = nn.Parameter(torch.ones(inner))
         self.out_proj = nn.Linear(inner, width, bias=False)
         nn.init.constant_(self.dt_proj.bias, -4.)
+        self.scan_backend = 'reference'
+        self.point_chunk_size = 0
 
     def scan(self, x):
         u, z = self.in_proj(x).chunk(2, -1)
@@ -32,12 +36,27 @@ class SelectiveScan(nn.Module):
         dt, b, c = torch.split(self.x_proj(u), [self.dt_proj.in_features, self.state, self.state], -1)
         dt = F.softplus(self.dt_proj(dt)).float()
         a = -self.a_log.float().exp()
-        h = torch.zeros((x.shape[0], self.inner, self.state), device=x.device, dtype=torch.float32)
-        outputs = []
-        for t in range(x.shape[1]):
-            h = torch.exp(dt[:, t, :, None] * a) * h + dt[:, t, :, None] * b[:, t, None].float() * u[:, t, :, None].float()
-            outputs.append((h * c[:, t, None].float()).sum(-1) + self.skip.float() * u[:, t].float())
-        y = torch.stack(outputs, 1).to(x.dtype) * F.silu(z)
+        if self.scan_backend == 'reference':
+            h = torch.zeros((x.shape[0], self.inner, self.state), device=x.device, dtype=torch.float32)
+            outputs = []
+            for t in range(x.shape[1]):
+                h = torch.exp(dt[:, t, :, None] * a) * h + dt[:, t, :, None] * b[:, t, None].float() * u[:, t, :, None].float()
+                outputs.append((h * c[:, t, None].float()).sum(-1) + self.skip.float() * u[:, t].float())
+            y = torch.stack(outputs, 1)
+        elif self.scan_backend == 'parallel':
+            from .selective_scan_parallel import parallel_scan
+            outputs = []
+            chunk = self.point_chunk_size or x.shape[0]
+            for start in range(0, x.shape[0], chunk):
+                delta, inp = dt[start:start+chunk], u[start:start+chunk].float()
+                alpha = torch.exp(delta[..., None] * a)
+                beta = delta[..., None] * b[start:start+chunk, :, None].float() * inp[..., None]
+                h = parallel_scan(alpha, beta)
+                outputs.append((h * c[start:start+chunk, :, None].float()).sum(-1) + self.skip.float() * inp)
+            y = torch.cat(outputs, 0)
+        else:
+            raise ValueError('unknown selective scan backend')
+        y = y.to(x.dtype) * F.silu(z)
         return self.out_proj(y)
 
     def forward(self, x):
@@ -80,6 +99,7 @@ class FeatureSidecar(nn.Module):
         # Zero ONLY the last projection; the sigmoid gate stays nonzero.
         nn.init.zeros_(self.output.weight)
         self.last_rms = 0.
+        self.runtime = {'backend':'reference', 'point_chunk_size':0, 'gain':1., 'max_correction_pixels':0., 'checkpoint_blocks':False}
 
     def forward(self, hidden, rich):
         return hidden.detach() + self.residual(hidden, rich)
@@ -104,8 +124,49 @@ class FeatureSidecar(nn.Module):
 
     def run_blocks(self, x):
         for block in self.blocks:
-            x = block(x)
+            if self.training and torch.is_grad_enabled() and self.runtime['checkpoint_blocks']:
+                from torch.utils.checkpoint import checkpoint
+                x = checkpoint(block, x, use_reentrant=False, preserve_rng_state=False)
+            else:
+                x = block(x)
         return x
+
+    def correction(self, residual, coordinate_weight):
+        raw = F.linear(residual, coordinate_weight)
+        gain, cap = self.runtime['gain'], self.runtime['max_correction_pixels']
+        # Defaults preserve the historical operation, including tensor strides.
+        applied = raw if gain == 1. else raw * gain
+        stride = getattr(self, 'coordinate_stride', 1)
+        length = torch.linalg.vector_norm(applied, dim=-1) * stride if cap > 0 else None
+        if cap > 0.:
+            applied = applied * (cap / length.clamp_min(cap))[..., None]
+        d = getattr(self, 'diagnostics', None)
+        if d is not None:
+            raw_length = torch.linalg.vector_norm(raw.detach(), dim=-1) * stride
+            d['sidecar_correction_count'] = d.get('sidecar_correction_count', 0) + raw_length.numel()
+            d['sidecar_raw_correction_sum'] = d.get('sidecar_raw_correction_sum', 0.) + float(raw_length.sum())
+            d['sidecar_raw_correction_max'] = max(d.get('sidecar_raw_correction_max', 0.), float(raw_length.max()))
+            applied_length = torch.linalg.vector_norm(applied.detach(), dim=-1) * stride
+            d['sidecar_applied_correction_sum'] = d.get('sidecar_applied_correction_sum', 0.) + float(applied_length.sum())
+            d['sidecar_applied_correction_max'] = max(d.get('sidecar_applied_correction_max', 0.), float(applied_length.max()))
+            d['sidecar_clipped_corrections'] = d.get('sidecar_clipped_corrections', 0) + (int((length > cap).sum()) if cap > 0 else 0)
+        return applied
+
+
+def configure_sidecar_runtime(model, backend='reference', point_chunk_size=0, gain=1., max_correction_pixels=0., checkpoint_blocks=False):
+    if backend not in ('reference','parallel') or isinstance(point_chunk_size,bool) or not isinstance(point_chunk_size,int) or point_chunk_size < 0:
+        raise ValueError('invalid scan backend / point chunk size')
+    if not math.isfinite(gain) or not 0 <= gain <= 1 or not math.isfinite(max_correction_pixels) or max_correction_pixels < 0:
+        raise ValueError('invalid residual gain / correction cap')
+    if not isinstance(checkpoint_blocks,bool):
+        raise ValueError('checkpoint_blocks must be boolean')
+    branch = model.updateformer.feature_sidecar
+    branch.runtime = {'backend':backend, 'point_chunk_size':point_chunk_size,
+                      'gain':float(gain), 'max_correction_pixels':float(max_correction_pixels), 'checkpoint_blocks':checkpoint_blocks}
+    for module in branch.modules():
+        if isinstance(module, SelectiveScan):
+            module.scan_backend, module.point_chunk_size = backend, point_chunk_size
+    return branch.runtime
 
 
 def tensor_hash(state):
@@ -129,9 +190,18 @@ def attach_sidecar(model, kind):
         parameter.requires_grad_(False)
     model.updateformer.feature_sidecar = FeatureSidecar(kind, model.updateformer.input_transform.in_features,
                                                        model.updateformer.flow_head.in_features)
+    model.updateformer.feature_sidecar.coordinate_stride = model.stride
     model.feature_sidecar_kind = kind
     model.frozen_pretrained = True
+    runtime_path = os.environ.get('TRACKRAD_SIDECAR_RUNTIME')
+    if runtime_path:
+        with open(runtime_path, encoding='utf-8-sig') as stream:
+            runtime = json.load(stream)
+        if set(runtime) != {'backend','point_chunk_size','gain','max_correction_pixels','checkpoint_blocks'}:
+            raise ValueError('unexpected sidecar runtime settings')
+        configure_sidecar_runtime(model, **runtime)
     return {'kind': kind, 'base_tensor_sha256': tensor_hash(model.state_dict()),
+            'execution_runtime': dict(model.updateformer.feature_sidecar.runtime),
             'initial_sidecar_sha256': tensor_hash(model.updateformer.feature_sidecar.state_dict()),
             'parameters': sum(p.numel() for p in model.parameters()),
             'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
