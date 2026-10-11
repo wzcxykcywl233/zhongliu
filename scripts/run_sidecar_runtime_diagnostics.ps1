@@ -6,9 +6,11 @@ param(
     [ValidateSet('profile','training','validation','test')][string]$Stage = 'training',
     [ValidateRange(1,5)][int]$ProbeSteps = 3,
     [ValidateRange(60,600)][int]$ProfileTimeoutSeconds = 180,
-    [ValidateRange(120,1800)][int]$TrainingTimeoutSeconds = 900
+    [ValidateRange(120,1800)][int]$TrainingTimeoutSeconds = 900,
+    [switch]$CompactScan
 )
 $ErrorActionPreference = 'Stop'
+if ($CompactScan -and ($ProbeSteps -ne 3 -or $Stage -notin @('profile','training'))) { throw 'Compact scan allows GPU proof then three-step training diagnosis only.' }
 $RepoRoot=(Resolve-Path -LiteralPath $RepoRoot).Path
 $TrainingResultsRoot=(Resolve-Path -LiteralPath $TrainingResultsRoot).Path.TrimEnd('\')
 $ResultsRoot=[IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
@@ -67,7 +69,7 @@ try {
     Write-DiagnosticJson (Join-Path $ResultsRoot 'frozen-study.json') ([ordered]@{Schema=1;Source=$Source;TrainingResultsRoot=$TrainingResultsRoot;
         OldProtocolSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'frozen-run.json')).Hash;
         OldAuditSHA256=(Get-FileHash -LiteralPath (Join-Path $TrainingResultsRoot 'train\training-audit.json')).Hash;
-        Images=$OldImages;ProbeSteps=$ProbeSteps;SchedulerNumSteps=1000;ProfileTimeoutSeconds=$ProfileTimeoutSeconds;
+        Images=$OldImages;CompactScan=[bool]$CompactScan;ProbeSteps=$ProbeSteps;SchedulerNumSteps=1000;ProfileTimeoutSeconds=$ProfileTimeoutSeconds;
         TrainingTimeoutSeconds=$TrainingTimeoutSeconds;TimingKinds=@('mlp','mamba');SequenceLen=60;Points=128;Iterations=4}) -Frozen
     Start-Transcript -Path (Join-Path $ResultsRoot 'queue.log') -Append | Out-Null; $Started=$true
     $Images=Initialize-LocalExperimentImages -RepoRoot $RepoRoot -ResultsRoot $ResultsRoot -TrainingRuntime $OldImages.Training -InferenceRuntime $OldImages.Inference
@@ -81,7 +83,8 @@ try {
         $Tasks=@()
         foreach ($Kind in @('mlp','mamba_short','mamba')) {
             $Variants=@(@{Backend='reference';Chunk=0;Checkpoint=$false})
-            if ($Kind -ne 'mlp') { foreach ($Checkpoint in @($false,$true)) { foreach ($Chunk in @(16,32)) { $Variants+=@{Backend='parallel';Chunk=$Chunk;Checkpoint=$Checkpoint} } } }
+            if ($CompactScan) { $Variants=@(@{Backend='compact';Chunk=0;Checkpoint=$false}) }
+            elseif ($Kind -ne 'mlp') { foreach ($Checkpoint in @($false,$true)) { foreach ($Chunk in @(16,32)) { $Variants+=@{Backend='parallel';Chunk=$Chunk;Checkpoint=$Checkpoint} } } }
             foreach ($Variant in $Variants) {
                 $Name=$Kind+'_'+$Variant.Backend+'_'+$Variant.Chunk+'_cp'+[int]$Variant.Checkpoint
                 $Tasks+=[ordered]@{name=$Name;kind=$Kind;runtime=[ordered]@{backend=$Variant.Backend;point_chunk_size=$Variant.Chunk;gain=1;max_correction_pixels=0;checkpoint_blocks=$Variant.Checkpoint}}
@@ -113,6 +116,20 @@ try {
             } elseif (-not (Test-Path -LiteralPath $Output)) { throw 'Worker returned success without a result.' }
         }
     } else {
+        $CompactRuntime=''
+        if ($CompactScan) {
+            # Re-verify GPU outputs, gradients, named weights and memory before
+            # any real updates. Does not rerun the dangerous reference graph.
+            Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
+                '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/verify_compact_scan_proof.py','--root','/study') (Join-Path $ResultsRoot 'compact-proof.log')
+            $Ready=Get-Content -LiteralPath (Join-Path $ResultsRoot 'compact-readiness.json') -Raw | ConvertFrom-Json
+            if (-not $Ready.complete -or $Ready.rows.Count -ne 3) { throw 'GPU compact proof must pass first.' }
+            foreach ($Property in $Ready.result_sha256.PSObject.Properties) {
+                if ((Get-FileHash -LiteralPath (Join-Path $ResultsRoot $Property.Name)).Hash -ne $Property.Value) { throw 'Compact proof changed.' }
+            }
+            $CompactRuntime=Join-Path $ResultsRoot 'compact-runtime.json'
+            Write-DiagnosticJson $CompactRuntime $Ready.runtime -Frozen
+        }
         foreach ($Kind in @('mlp','mamba')) {
             $Folder=Join-Path $ResultsRoot "training\seed_0\$Kind"; New-Item -ItemType Directory -Force -Path $Folder | Out-Null
             $Output=Join-Path $Folder 'phase-profile.json'
@@ -122,13 +139,17 @@ try {
                 throw 'Partial training probe found. Preserve it; use a new ResultsRoot. Do not mix resumed diagnostic updates.'
             }
             Write-Host "REAL PHASE PROBE $Kind; updates=$ProbeSteps; original schedule=1000; budget=$TrainingTimeoutSeconds seconds"
-            $Status=Invoke-BudgetDocker @('run','--rm','--pull','never','--network','none','--gpus','device=0','--shm-size','4g',
+            $Arguments=@('run','--rm','--pull','never','--network','none','--gpus','device=0','--shm-size','4g')
+            if ($CompactRuntime) { $Arguments+=@('--mount',"type=bind,source=$CompactRuntime,target=/opt/sidecar/runtime.json,readonly") }
+            $Arguments+=@(
                 '--mount',"type=bind,source=$($Datasets['train-40']),target=/data,readonly",
                 '--mount',"type=bind,source=$RepoRoot\training-checkpoints,target=/checkpoints,readonly",'--mount',"type=bind,source=$Folder,target=/results",
                 '--entrypoint','/usr/bin/timeout',$Images.Training,'--signal=TERM','--kill-after=10s',"${TrainingTimeoutSeconds}s",
                 '/opt/app/.pixi/envs/training/bin/python','/opt/app/experiments/profile_sidecar_training_phases.py',
                 '--kind',$Kind,'--steps',([string]$ProbeSteps),'--dataset','/data','--checkpoints','/checkpoints',
-                '--output','/results','--trainer-sha256',$TrainerSHA256) (Join-Path $Folder 'training.log')
+                '--output','/results','--trainer-sha256',$TrainerSHA256)
+            if ($CompactRuntime) { $Arguments+=@('--runtime-config','/opt/sidecar/runtime.json') }
+            $Status=Invoke-BudgetDocker $Arguments (Join-Path $Folder 'training.log')
             if ($Status -in @(124,137)) {
                 Write-DiagnosticJson (Join-Path $Folder 'timeout.json') ([ordered]@{complete=$false;status='timeout';exit_code=$Status;budget_seconds=$TrainingTimeoutSeconds})
                 throw "Real $Kind probe timed out; retain partial phase-profile.json. No larger training will run."
@@ -139,5 +160,9 @@ try {
     Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
         '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/summarize_sidecar_runtime.py',
         '--root','/study','--stage',$Stage,'--steps',([string]$ProbeSteps)) (Join-Path $ResultsRoot 'summary.log')
+    if ($CompactScan -and $Stage -eq 'profile') {
+        Invoke-LocalDocker @('run','--rm','--pull','never','--network','none','--mount',"type=bind,source=$ResultsRoot,target=/study",
+            '--entrypoint','/opt/app/.pixi/envs/training/bin/python',$Images.Training,'/opt/app/experiments/verify_compact_scan_proof.py','--root','/study') (Join-Path $ResultsRoot 'compact-proof.log')
+    }
     Write-Host "Diagnostics complete: $ResultsRoot. No new 1000-step training was launched."
 } finally { if ($Started) { Stop-Transcript | Out-Null }; $Lock.Dispose() }

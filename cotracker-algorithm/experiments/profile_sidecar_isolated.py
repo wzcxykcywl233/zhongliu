@@ -56,6 +56,24 @@ def run(args):
         save_json(partial_path,partial)
         print(json.dumps(event),flush=True)
     result=benchmark(model,hidden,rich,runtime,warmup=1,repeats=2,progress=progress)
+    if args.backend=='compact':
+        # Small real-model P/V/C check with identical POST-benchmark weights.
+        # It is not an official split evaluation or a full-resolution proof.
+        model.eval()
+        video=torch.rand(1,3,3,64,64,device='cuda')*255
+        queries=torch.tensor([[[0.,16.,16.],[1.,32.,32.]]],device='cuda')
+        with torch.no_grad():
+            configure_sidecar_runtime(model)
+            original=model(video=video,queries=queries,iters=2)
+            configure_sidecar_runtime(model,**runtime)
+            compact=model(video=video,queries=queries,iters=2)
+        differences=[]
+        for a,b in zip(original[:3],compact[:3]):
+            torch.testing.assert_close(a,b,rtol=3e-5,atol=3e-6)
+            differences.append(float((a-b).abs().max()))
+        if differences[0]>.001 or max(differences[1:])>1e-5: raise ValueError('Compact model P/V/C proof exceeded limits')
+        result['model_parity']={'complete':True,'frames':3,'points':2,'iterations':2,'max_abs_pvc':differences,
+            'note':'Small GPU integration proof; not full-resolution performance.'}
     result.update({'complete':True,'kind':args.kind,'correctness':proof,'pid':os.getpid(),
         'fresh_process_per_configuration':True,'source_checkpoint_sha256':file_sha(path),
         'torch':torch.__version__,'device':torch.cuda.get_device_name(),
@@ -70,11 +88,12 @@ if __name__=='__main__':
     p.add_argument('--train',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--kind',choices=['mlp','mamba_short','mamba'],required=True)
-    p.add_argument('--backend',choices=['reference','parallel'],required=True)
+    p.add_argument('--backend',choices=['reference','parallel','compact'],required=True)
     p.add_argument('--chunk',type=int,default=0)
     p.add_argument('--checkpoint',action='store_true')
     p.add_argument('--loader-sha256',required=True)
     a=p.parse_args()
     if a.backend=='reference' and (a.chunk or a.checkpoint): p.error('Reference control uses no chunk/checkpoint')
     if a.backend=='parallel' and a.chunk not in (16,32): p.error('Parallel probe uses chunk 16 or 32')
+    if a.backend=='compact' and (a.chunk or a.checkpoint): p.error('Compact proof uses sparse states without point chunks/block checkpoint')
     run(a)

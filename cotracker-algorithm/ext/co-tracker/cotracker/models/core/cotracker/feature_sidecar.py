@@ -43,6 +43,9 @@ class SelectiveScan(nn.Module):
                 h = torch.exp(dt[:, t, :, None] * a) * h + dt[:, t, :, None] * b[:, t, None].float() * u[:, t, :, None].float()
                 outputs.append((h * c[:, t, None].float()).sum(-1) + self.skip.float() * u[:, t].float())
             y = torch.stack(outputs, 1)
+        elif self.scan_backend == 'compact':
+            from .selective_scan_compact import compact_selective_scan
+            y = compact_selective_scan(u.float(),dt,a,b.float(),c.float(),self.skip.float())
         elif self.scan_backend == 'parallel':
             from .selective_scan_parallel import parallel_scan
             outputs = []
@@ -154,8 +157,10 @@ class FeatureSidecar(nn.Module):
 
 
 def configure_sidecar_runtime(model, backend='reference', point_chunk_size=0, gain=1., max_correction_pixels=0., checkpoint_blocks=False):
-    if backend not in ('reference','parallel') or isinstance(point_chunk_size,bool) or not isinstance(point_chunk_size,int) or point_chunk_size < 0:
+    if backend not in ('reference','parallel','compact') or isinstance(point_chunk_size,bool) or not isinstance(point_chunk_size,int) or point_chunk_size < 0:
         raise ValueError('invalid scan backend / point chunk size')
+    if backend == 'compact' and point_chunk_size != 0:
+        raise ValueError('Compact scan uses sparse temporal states, not point chunks')
     if not math.isfinite(gain) or not 0 <= gain <= 1 or not math.isfinite(max_correction_pixels) or max_correction_pixels < 0:
         raise ValueError('invalid residual gain / correction cap')
     if not isinstance(checkpoint_blocks,bool):

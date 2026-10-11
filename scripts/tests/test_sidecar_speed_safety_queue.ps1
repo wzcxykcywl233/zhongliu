@@ -77,6 +77,15 @@ function global:docker {
         $Folder=([string](@($args | Where-Object { $_ -like '*target=/results' })[0])).Replace('type=bind,source=','').Replace(',target=/results','')
         Save-Json (Join-Path $Folder 'phase-profile.json') @{complete=$true;diagnostic_steps=3;scheduler_num_steps=1000}
     }
+    if ($args -contains '/opt/app/experiments/verify_compact_scan_proof.py') {
+        $Folder=([string](@($args | Where-Object { $_ -like '*target=/study' })[0])).Replace('type=bind,source=','').Replace(',target=/study','')
+        if (-not (Test-Path -LiteralPath "$Folder\probe-manifest.json")) { throw 'Mock missing compact proof' }
+        $Manifest=Get-Content -LiteralPath "$Folder\probe-manifest.json" -Raw | ConvertFrom-Json
+        if ($Manifest.Count -ne 3 -or @($Manifest | Where-Object { $_.runtime.backend -ne 'compact' -or $_.runtime.checkpoint_blocks -or $_.runtime.point_chunk_size }).Count) { throw 'Wrong compact proof manifest' }
+        $Hashes=@{}
+        foreach ($Arm in $Manifest) { $Relative='isolated/'+$Arm.name+'/result.json'; $Hashes[$Relative]=(Get-FileHash -LiteralPath (Join-Path $Folder $Relative)).Hash }
+        Save-Json "$Folder\compact-readiness.json" @{complete=$true;runtime=$Manifest[0].runtime;rows=@(1,2,3);result_sha256=$Hashes}
+    }
 }
 $Queue="$ActualRepo\scripts\run_sidecar_speed_safety_resumable.ps1"
 $BeforeAudit=(Get-FileHash -LiteralPath "$OldRoot\train\training-audit.json").Hash
@@ -138,6 +147,21 @@ Save-Json "$TimingRoot\training\seed_0\mamba\phase-profile.json" @{complete=$fal
 $Refused=$false
 try { & $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $TimingRoot -Stage training } catch { $Refused=$true }
 if (-not $Refused) { throw 'Mixed partial real training accepted' }
+# Compact adjustment: no old over-budget reference benchmark, GPU gate first.
+$CompactRoot=Join-Path $TaskRoot 'compact'
+$BeforeTraining=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' }).Count
+$Refused=$false
+try { & $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $CompactRoot -Stage training -CompactScan } catch { $Refused=$true }
+if (-not $Refused -or @($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' }).Count -ne $BeforeTraining) { throw 'Compact real training ran before GPU proof' }
+$BeforeSynthetic=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_isolated.py' }).Count
+& $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $CompactRoot -Stage profile -CompactScan
+$CompactCalls=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_isolated.py' } | Select-Object -Skip $BeforeSynthetic)
+if ($CompactCalls.Count -ne 3 -or @($CompactCalls | Where-Object { $_[[Array]::IndexOf($_,'--backend')+1] -ne 'compact' }).Count) { throw 'Compact proof ran old high-memory benchmarks' }
+& $TimingQueue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $CompactRoot -Stage training -CompactScan
+$CompactTraining=@($global:SpeedDockerCalls | Where-Object { $_ -contains '/opt/app/experiments/profile_sidecar_training_phases.py' } | Select-Object -Skip $BeforeTraining)
+if ($CompactTraining.Count -ne 2 -or @($CompactTraining | Where-Object { $_ -notcontains '--runtime-config' }).Count) { throw 'Compact training did not pin runtime' }
+$PinnedRuntime=Get-Content -LiteralPath "$CompactRoot\compact-runtime.json" -Raw | ConvertFrom-Json
+if ($PinnedRuntime.backend -ne 'compact' -or $PinnedRuntime.gain -ne 1 -or $PinnedRuntime.max_correction_pixels -ne 0 -or $PinnedRuntime.checkpoint_blocks) { throw 'Training method was changed' }
 [IO.File]::WriteAllText($Data[0].File,'changed',$Utf8)
 $Refused=$false
 try { & $Queue -RepoRoot $FixtureRepo -TrainingResultsRoot $OldRoot -ResultsRoot $NewRoot -Stage profile } catch { $Refused=$true }

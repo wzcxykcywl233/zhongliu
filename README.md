@@ -296,3 +296,5 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 ## 支线训练耗时与退化独立诊断
 
 [运行说明](cotracker-algorithm/experiments/SIDECAR_RUNTIME_DIAGNOSTICS.zh-CN.md)：`scripts/run_sidecar_runtime_diagnostics.ps1` 默认 `-Stage training`，只做 MLP/长 Mamba 各 3 步真实分阶段计时，保留原千步学习率计划。`-Stage profile` 为 11 组独立进程、每组 180 秒预算的合成微基准；`-Stage validation` 不再受加速门槛阻塞，固定原后端复用旧权重诊断 gain/修正上限。未启动新的千步训练；候选合格后显式 `-Stage test` 报告 38 例结果，旧目录保持不变。
+
+真实计时定位到 Mamba 反向显存超额压力后，新增[低显存扫描调整](cotracker-algorithm/experiments/SIDECAR_COMPACT_SCAN.zh-CN.md)：`scripts/repair_sidecar_scan_memory.ps1 -Stage proof` 先验证稀疏状态/解析反向，GPU 输出、梯度、P/V/C 和显存通过后显式 `-Stage training` 仅做 3 步计时。使用新目录 `sidecar-compact-scan-v4`，不重跑旧全尺寸 reference 高显存训练图，不启动千步训练。
