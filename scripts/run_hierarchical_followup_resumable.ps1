@@ -16,7 +16,8 @@ param(
     [string]$ModelCheckpoint = "",
     [string]$SidecarRuntimeConfig = "",
     [switch]$SidecarTrackCache,
-    [string]$FusionGateCheckpoint = ""
+    [string]$FusionGateCheckpoint = "",
+    [switch]$RecoverLongPathOutput
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,6 +91,9 @@ try {
     if ($PointDecoupling -and (-not $RequireDiagnostics -or -not $FreezeImages -or -not $UsePinnedImages -or
         @($Profiles | Where-Object { $_ -notin @('pd_dense','pd_dense_repeat','pd_dense_thin','pd_sparse_matched','pd_sparse_native') }).Count -gt 0)) {
         throw 'Point decoupling requires the registered profiles, diagnostics and pinned images.'
+    }
+    if ($RecoverLongPathOutput -and (-not $RequireDiagnostics -or -not $SidecarTrackCache -or -not $FreezeImages -or -not $UsePinnedImages -or $PointDecoupling)) {
+        throw 'Long-path recovery requires the pinned sidecar diagnostic queue.'
     }
     Write-RunMessage "Profiles: $($Profiles -join ', ')"
     Write-RunMessage "Dataset: $Dataset"
@@ -186,9 +190,10 @@ try {
             $ProfileDir = Join-Path $Results $Profile
             $Checkpoint = Join-Path $ProfileDir "checkpoint"
             $Attempts = Join-Path $Checkpoint ".attempts"
+            $ShortAttempts = Join-Path $Checkpoint ".a"
             $Jobs = Join-Path $Checkpoint "jobs"
             $MetricsPath = Join-Path $ProfileDir "metrics.json"
-            New-Item -ItemType Directory -Force -Path $Attempts, $Jobs | Out-Null
+            New-Item -ItemType Directory -Force -Path $Attempts, $ShortAttempts, $Jobs | Out-Null
 
             Write-RunMessage "===== $Profile ====="
             if (Test-Path -LiteralPath $MetricsPath -PathType Leaf) {
@@ -232,10 +237,14 @@ try {
                     Write-RunMessage "Moved incomplete checkpoint: $Recovered"
                 }
 
-                $AttemptId = ([guid]::NewGuid().ToString("N")).Substring(0, 8)
-                $AttemptDir = Join-Path $Attempts "$CaseId-$AttemptId"
+                $AttemptId = ([guid]::NewGuid().ToString("N")).Substring(0, 6)
+                $AttemptDir = Join-Path $ShortAttempts "$CaseId-$AttemptId"
                 $AttemptOutput = Join-Path $AttemptDir "output"
                 $CaseLog = Join-Path $AttemptDir "case.log"
+                $Output = Join-Path $AttemptOutput "images\mri-linac-series-targets\output.mha"
+                if ($Output.Length -ge 256 -or $CompletedOutput.Length -ge 256) {
+                    throw 'Output path exceeds safe Windows path budget. Preserve results and use a shorter results root.'
+                }
                 New-Item -ItemType Directory -Force -Path $AttemptOutput | Out-Null
 
                 Write-RunMessage "Running: $Profile/$CaseId"
@@ -322,13 +331,43 @@ try {
                         )
                     }
                 }
+                $RecoveredOutput = $false
+                $LegacyAttempts = @()
+                if ($RecoverLongPathOutput -and $SidecarRuntimeConfig) {
+                    $LegacyAttempts = @(Get-ChildItem -LiteralPath $Attempts -Directory | Where-Object { $_.Name -match ('^'+[regex]::Escape($CaseId)+'-[0-9a-f]{8}$') })
+                }
+                if ($LegacyAttempts.Count -gt 0) {
+                    $Kind = if ($ModelCheckpoint -match '\\(mlp|mamba)\\cotracker_three_final\.pth$') { $Matches[1] } else { throw 'Unsupported sidecar recovery checkpoint path.' }
+                    $RecoveryStatus = Invoke-DockerLogged -LogPath (Join-Path $AttemptDir 'recovery.log') -Arguments @(
+                        'run','--rm','--pull','never','--network','none',
+                        '--mount',"type=bind,source=$Repository\cotracker-algorithm\experiments\recover_sidecar_output.py,target=/repair/recover.py,readonly",
+                        '--mount',"type=bind,source=$Attempts,target=/previous,readonly",
+                        '--mount',"type=bind,source=$($CaseFolder.FullName),target=/case,readonly",
+                        '--mount',"type=bind,source=$SidecarRuntimeConfig,target=/runtime.json,readonly",
+                        '--mount',"type=bind,source=$RunnerLog,target=/runner.log,readonly",
+                        '--mount',"type=bind,source=$AttemptDir,target=/recovered",
+                        '--entrypoint','/opt/app/.pixi/envs/cuda/bin/python',$AlgorithmImage,'/repair/recover.py',
+                        '--previous','/previous','--output','/recovered','--case','/case','--case-id',$CaseId,
+                        '--profile',$Profile,'--kind',$Kind,'--runtime','/runtime.json','--runner-log','/runner.log',
+                        '--checkpoint-sha256',(Get-FileHash -LiteralPath $ModelCheckpoint).Hash.ToLowerInvariant())
+                    if ($RecoveryStatus -ne 0) { throw 'Legacy output recovery validation failed; preserve attempts for inspection.' }
+                    $Receipt = Get-Content -LiteralPath (Join-Path $AttemptDir 'recovery.json') -Raw | ConvertFrom-Json
+                    $RecoveredOutput = [bool]$Receipt.recovered
+                    if ($RecoveredOutput) {
+                        $StartedAt = ([DateTimeOffset]$Receipt.started_at).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
+                        Write-RunMessage "Recovered verified output without inference: $Profile/$CaseId from $($Receipt.source_attempt)"
+                    }
+                }
+                if (-not $RecoveredOutput) {
                 $Status = Invoke-DockerLogged `
                     -LogPath $CaseLog `
                     -Arguments $DockerArguments
                 if ($Status -ne 0) {
                     throw "$Profile/$CaseId failed with exit code $Status"
                 }
+                }
                 $CompletedAt = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
+                if ($RecoveredOutput) { $CompletedAt = ([DateTimeOffset]$Receipt.completed_at).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ") }
 
                 $Output = Join-Path $AttemptOutput "images\mri-linac-series-targets\output.mha"
                 if (-not (Test-Path -LiteralPath $Output -PathType Leaf) -or
@@ -409,6 +448,9 @@ try {
                     )
                     started_at = $StartedAt
                     completed_at = $CompletedAt
+                }
+                if ($RecoveredOutput) {
+                    $Prediction['recovery'] = @{source_attempt=$Receipt.source_attempt;runtime_estimated=$true;timestamp_basis=$Receipt.timestamp_basis}
                 }
                 Write-AtomicJson -Path (Join-Path $AttemptDir "prediction.json") -Value $Prediction
                 [System.IO.File]::WriteAllText(

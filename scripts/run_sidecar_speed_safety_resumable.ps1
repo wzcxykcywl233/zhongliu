@@ -5,10 +5,12 @@ param(
     [string]$ResultsRoot = 'C:\zhongliu\zhongliu-tuning\protocol-40-10-38\sidecar-speed-safety-loadfix-v2',
     [ValidateSet('profile','smoke','validation','test')][string]$Stage = 'profile',
     [ValidateRange(1.01,100)][double]$MinimumSpeedup = 2,
-    [switch]$ReferenceDiagnosisOnly
+    [switch]$ReferenceDiagnosisOnly,
+    [switch]$RepairOutputPaths
 )
 $ErrorActionPreference = 'Stop'
 if ($ReferenceDiagnosisOnly -and $Stage -notin @('validation','test')) { throw 'Reference diagnosis is validation/test only; use the runtime diagnostic queue for timing.' }
+if ($RepairOutputPaths -and (-not $ReferenceDiagnosisOnly -or $Stage -notin @('validation','test'))) { throw 'Path repair is independent sidecar validation/test only.' }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $TrainingResultsRoot = (Resolve-Path -LiteralPath $TrainingResultsRoot).Path.TrimEnd('\')
 $ResultsRoot = [IO.Path]::GetFullPath($ResultsRoot).TrimEnd('\')
@@ -41,6 +43,12 @@ $Source = @(foreach ($File in ($Files | Sort-Object)) { if ($File -match '\.(py|
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 function Write-FrozenJson([string]$Path,$Value) {
     $Json = ConvertTo-Json -InputObject $Value -Depth 100
+    if ($RepairOutputPaths -and [IO.Path]::GetFileName($Path) -eq 'frozen-study.json') {
+        if (-not (Test-Path -LiteralPath $Path)) { throw 'Path repair requires an existing frozen study.' }
+        . (Join-Path $RepoRoot 'scripts\sidecar_path_repair_provenance.ps1')
+        Confirm-SidecarPathRepair -Path $Path -Value $Value -RepoRoot $RepoRoot
+        return
+    }
     if (Test-Path -LiteralPath $Path) { if ([IO.File]::ReadAllText($Path) -ne $Json) { throw 'Study source/settings changed; use a new results root.' } }
     else { [IO.File]::WriteAllText("$Path.tmp",$Json,$Utf8); Move-Item -LiteralPath "$Path.tmp" -Destination $Path }
 }
@@ -133,23 +141,25 @@ try {
         $Arms=@($Arms | Where-Object { $Included -contains $_.name })
     }
     $Runner=Join-Path $RepoRoot 'scripts\run_hierarchical_followup_resumable.ps1'
+    $RepairFlags=@{}
+    if ($RepairOutputPaths) { $RepairFlags['RecoverLongPathOutput']=$true }
     $Pinned=Join-Path $ResultsRoot 'reference-images.json'
     & $Runner -Repository $RepoRoot -Dataset $Datasets[$Split] -Results (Join-Path $ResultsRoot "$Split\pretrained") `
         -Profiles @($Old.InferenceProfile) -ModelCheckpoint (Join-Path $TrainingResultsRoot 'pretrained-frozen.pth') `
-        -RequireDiagnostics -SidecarTrackCache -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned
+        -RequireDiagnostics -SidecarTrackCache -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned @RepairFlags
     if ($Stage -eq 'validation' -and -not $ReferenceDiagnosisOnly) {
         $Shadow=Join-Path $ResultsRoot 'mamba_reference-runtime.json'
         Write-FrozenJson $Shadow ([ordered]@{backend='reference';point_chunk_size=0;gain=1;max_correction_pixels=0;checkpoint_blocks=$false})
         & $Runner -Repository $RepoRoot -Dataset $Datasets[$Split] -Results (Join-Path $ResultsRoot "$Split\seed_0\mamba_reference") `
             -Profiles @($Old.InferenceProfile) -ModelCheckpoint (Join-Path $TrainingResultsRoot 'train\seed_0\mamba\cotracker_three_final.pth') `
-            -RequireDiagnostics -SidecarTrackCache -SidecarRuntimeConfig $Shadow -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned
+            -RequireDiagnostics -SidecarTrackCache -SidecarRuntimeConfig $Shadow -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned @RepairFlags
     }
     foreach ($Seed in @(0,1,2)) {
         foreach ($Arm in $Arms) {
             & $Runner -Repository $RepoRoot -Dataset $Datasets[$Split] -Results (Join-Path $ResultsRoot "$Split\seed_$Seed\$($Arm.name)") `
                 -Profiles @($Old.InferenceProfile) -ModelCheckpoint (Join-Path $TrainingResultsRoot "train\seed_$Seed\$($Arm.kind)\cotracker_three_final.pth") `
                 -RequireDiagnostics -SidecarTrackCache -SidecarRuntimeConfig (Join-Path $ResultsRoot ($Arm.name+'-runtime.json')) `
-                -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned
+                -FreezeImages -UsePinnedImages -ReferenceImagesPath $Pinned @RepairFlags
         }
     }
     Invoke-LocalDocker @('run','--rm','--pull','never','--network','none',

@@ -311,3 +311,7 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 - `-Stage test`：仅验证集平均DSC不低于参照且D98下降不超过0.001的候选可进入38例报告，设置在种子间一致并冻结；需要显式执行，不因速度通过自动启动。测试集已反复观察，不宣称盲测。
 
 关键结果：`runtime/stability-summary.json`、`runtime/stability-summary.csv`、`degradation/validation-10/sidecar-safety-summary.csv`、`degradation/validation-10/sidecar-safety-case-diagnostics.csv`、`degradation/selection.json`。这些阶段没有新的1000步训练入口。部分进程失败时保留证据，换新的ResultsRoot重新验证，禁止把残缺探针拼成完成结果。
+
+若 v5 退化验证在 `mamba_gain050_cap05/A_010` 报 `did not produce a valid output.mha`，而WSL已确认输出存在：使用 `scripts/repair_sidecar_output_paths.ps1 -Stage validation`，不要重跑训练或删除旧结果。恢复入口保留原 `degradation/frozen-study.json`，仅接受已审阅的宿主路径修复，写入独立 `path-repair-provenance.json`；模型、权重、数据、配置、旧镜像及筛选规则必须不变，不重新构建镜像。
+
+新临时目录改为较短的 `checkpoint/.a/<case>-<6位ID>`，输出路径达到256字符时提前拒绝。旧 `.attempts` 保留：在同一个冻结的推理镜像里进行CPU检查，核对完整写入日志、实验配置/支线运行配置、MHA形状和二值内容、诊断数组哈希及轨迹缓存，校验通过后逐字节复制到短目录，沿用原日志并完成病例提交，不重复推理该病例。原临时文件不会删除。旧日志没有独立执行收据，复用还依赖原研究的冻结源码/数据/权重/镜像守卫；恢复收据记录这一限制。该例起止时间采用原runner的Running/FAILED事件边界，匹配日志修改时间并保存原始日志快照；`TimeSec`标记为恢复估计，不能作为精确端到端速度证据，原日志中的算法耗时保留。多个旧输出、时间边界歧义、缓存缺失、配置或内容不符均停止，不能随意选择旧尝试。
