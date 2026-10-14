@@ -1,5 +1,16 @@
 # CoTracker3 for Tumor Tracking 
 
+### Teacher-only single-factor experiments (no Mamba)
+
+`diagnostics/teacher-single-factor-v1/run_teacher_experiments.ps1` compares existing
+offline teacher weights and earlier inference mechanisms in 32 one-factor profiles.
+Start with `-Stage plan`, `-Stage smoke`, then `-Stage validation -Group weights`;
+other groups are explicit and reuse verified parent controls. No teacher/student
+training, image build, pull or network is performed. A frozen validation shortlist
+and explicit `-Stage test` produce a separate 38-case **teacher-generator** report,
+not student performance. First-frame boundary queries only; arbitrary-time training
+adaptation is deliberately not assumed. See [design and commands](diagnostics/teacher-single-factor-v1/README.txt).
+
 ### Dynamic anchors and frozen-Transformer feature sidecars
 
 Two independent 40/10/38 studies are ready in `scripts/run_anchor_and_sidecar_queues.ps1`.
