@@ -48,9 +48,15 @@ function global:Start-Process {
         New-Item -ItemType Directory -Force -Path $Folder | Out-Null
         $ReceiptPath=Join-Path $Folder 'preflight.json'
         $ManifestSHA=(Get-FileHash -LiteralPath (Join-Path $Global:TeacherOutput 'manifest.json')).Hash.ToLowerInvariant()
-        [IO.File]::WriteAllText($ReceiptPath,('{"owner_uid":997,"owner_gid":998,"manifest_sha256":"'+$ManifestSHA+'"}'))
+        [IO.File]::WriteAllText($ReceiptPath,('{"owner_uid":997,"owner_gid":998,"original_evaluator_runtime":{"identity":{"uid":999,"gid":999}},"manifest_sha256":"'+$ManifestSHA+'"}'))
         $ReceiptSHA=(Get-FileHash -LiteralPath $ReceiptPath).Hash.ToLowerInvariant()
         [IO.File]::WriteAllText((Join-Path $Folder 'latest.json'),('{"receipt":"permission-repair/'+$Split+'/'+$Profile+'/preflight.json","sha256":"'+$ReceiptSHA+'"}'))
+    }
+    if ($Index -ge 0 -and $Arguments[$Index+1] -eq 'runtime') {
+        [IO.File]::WriteAllText($RedirectStandardOutput,'TEACHER_EVALUATOR_RUNTIME {"identity":{"uid":999,"gid":999},"modules":{"psutil":{}}}')
+    }
+    if ($Index -ge 0 -and $Arguments[$Index+1] -eq 'evaluate') {
+        [IO.File]::WriteAllText($RedirectStandardOutput,'TEACHER_METRICS_JSON {"schema":2,"type":"teacher-official-metrics","metrics_json":"{\n\"results\":[]}"}')
     }
     $Exit=if ($Global:FailTeacher -and $Index -ge 0 -and $Arguments[$Index+1] -eq 'infer') {7} else {0}
     $Result=New-Object PSObject -Property @{ExitCode=$Exit;Handle=1234}
@@ -75,21 +81,28 @@ try {
         if ($Action -eq 'evaluate') {
             if ($ReadOnly -ne 5) {throw 'Evaluation input/source/receipt/manifest mounts must be read-only'}
             $UserIndex=[Array]::IndexOf($Arguments,'--user')
-            if ($UserIndex -lt 0 -or $Arguments[$UserIndex+1] -ne '997:998') {throw 'Evaluator did not adopt actual directory owner'}
-            foreach ($Guard in @('--read-only','--cap-drop','ALL','no-new-privileges','HOME=/home/user','PYTHONUSERBASE=/home/user/.local')) {
+            if ($UserIndex -ge 0 -or $Arguments -contains 'HOME=/home/user' -or $Arguments -contains 'PYTHONUSERBASE=/home/user/.local') {throw 'Evaluator original identity/dependency environment changed'}
+            if ($Arguments -notcontains '/output:rw,nosuid,nodev,size=128m,mode=0700,uid=999,gid=999') {throw 'Evaluator output must be private original-user scratch'}
+            if (@($Arguments | Where-Object {$_ -like 'type=bind,*/output*'}).Count -ne 0) {throw 'Evaluator must not write host output directly'}
+            foreach ($Guard in @('--read-only','--cap-drop','ALL','no-new-privileges')) {
                 if ($Arguments -notcontains $Guard) {throw "Missing evaluator guard: $Guard"}
             }
             if ($Arguments -notcontains '/tmp:rw,nosuid,nodev,size=256m,mode=1777') {throw 'Restricted writable temp directory missing'}
+        } elseif ($Action -eq 'runtime') {
+            if ($ReadOnly -ne 1 -or $Arguments -contains '--user') {throw 'Original runtime audit identity changed'}
         } elseif ($Action -eq 'prepare') {
-            if ($ReadOnly -ne 3) {throw 'Preflight input mounts must remain read-only'}
+            if ($ReadOnly -ne 4) {throw 'Preflight input mounts must remain read-only'}
+        } elseif ($Action -eq 'publish') {
+            $UserIndex=[Array]::IndexOf($Arguments,'--user')
+            if ($ReadOnly -ne 3 -or $UserIndex -lt 0 -or $Arguments[$UserIndex+1] -ne '997:998') {throw 'Only publisher adopts actual output owner'}
         } else {
             if ($ReadOnly -ne 7) {throw 'Original worker input mounts changed'}
             if ($Arguments -notcontains ('type=bind,source='+$OriginalPackage+',target=/teacher-source,readonly')) {throw 'Original frozen package was replaced by repair package'}
             if ($Arguments -contains '--user') {throw 'Inference/worker identity changed'}
         }
     }
-    if (($Actions -join ',') -ne 'plan,infer,prepare,evaluate,record,infer,prepare,evaluate,record,infer,prepare,evaluate,record,report') {throw 'Ancestor order/evaluation handoff failed'}
-    if ($Global:TeacherCalls.Count -ne 14) {throw 'Unexpected job count'}
+    if (($Actions -join ',') -ne 'plan,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,report') {throw 'Ancestor order/evaluation handoff failed'}
+    if ($Global:TeacherCalls.Count -ne 20) {throw 'Unexpected job count'}
     [IO.File]::WriteAllText((Join-Path $Output 'selection.json'),'{"test_profiles":["old","scaled"]}')
     $Global:TeacherCalls.Clear()
     & (Join-Path $PSScriptRoot 'run_repair.ps1') @Parameters -Stage test
@@ -108,7 +121,7 @@ try {
     $Rejected=$false
     try {& (Join-Path $PSScriptRoot 'run_repair.ps1') @Parameters -Stage test} catch {$Rejected=$_.Exception.Message -like '*exit 7*'}
     if (-not $Rejected -or $Global:TeacherCalls.Count -ne 2) {throw 'Failure did not stop before evaluator/next teacher'}
-    Write-Host 'PASS mocked permission repair: owner-matched evaluator, original frozen package, readonly/capability guards, explicit shortlist and stop-on-failure. No Docker/GPU run.'
+    Write-Host 'PASS mocked permission repair: original-user evaluator, owner-matched publisher, tagged JSON data transport, frozen package and guards. No Docker/GPU run.'
 } finally {
     Remove-Item Function:\docker
     Remove-Item Function:\Start-Process

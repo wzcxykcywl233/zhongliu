@@ -14,9 +14,11 @@ adaptation is deliberately not assumed. See [design and commands](diagnostics/te
 If the evaluator fails to write `/output/metrics.json` with `PermissionError`, use
 the separate [evaluation permission repair](diagnostics/teacher-eval-permission-fix-v1/README.txt)
 entry `diagnostics/teacher-eval-permission-fix-v1/run_repair.ps1 -Stage validation -Group weights`.
-It preserves the original frozen package, manifest and completed predictions,
-matches only the evaluator's container identity to the actual output owner, and
-checks writing before calculating metrics. No chmod/chown, image build or retraining.
+It preserves the original frozen package, manifest and completed predictions.
+The evaluator keeps its original image user and dependencies and computes into
+private scratch output; a separate directory-owner writer publishes byte-identical
+metrics with SHA256 checks. This also fixes `psutil` lookup after UID changes.
+No chmod/chown, dependency installation, image build or retraining.
 
 ### Dynamic anchors and frozen-Transformer feature sidecars
 

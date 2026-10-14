@@ -61,7 +61,7 @@ try {
 if ($EngineStatus -ne 0) {throw 'Start Docker Desktop first; no image build/pull was attempted.'}
 New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 $Lock=[IO.File]::Open($OutputRoot+'.lock','OpenOrCreate','ReadWrite','None')
-function Invoke-TeacherContainer([string[]]$Arguments,[string]$Label,[string]$Container) {
+function Invoke-TeacherContainer([string[]]$Arguments,[string]$Label,[string]$Container,[switch]$ReturnLog) {
     $LogBase=$OutputRoot+'.launch-'+$Label+'-'+[Guid]::NewGuid().ToString('N').Substring(0,8)
     Write-Host "START $Label (timeout $JobTimeoutSeconds seconds)"
     $Process=Start-TeacherProcess -Arguments $Arguments -LogBase $LogBase
@@ -74,15 +74,16 @@ function Invoke-TeacherContainer([string[]]$Arguments,[string]$Label,[string]$Co
         }
         if ([int]$Watch.Elapsed.TotalSeconds % 60 -lt 11) {
             Write-Host "RUNNING $Label elapsed=$([int]$Watch.Elapsed.TotalSeconds)s; log=$LogBase.stdout.log"
-            Get-Content -LiteralPath ($LogBase+'.stdout.log') -Tail 2 -ErrorAction SilentlyContinue | ForEach-Object {Write-Host $_}
+            Get-Content -LiteralPath ($LogBase+'.stdout.log') -Tail 2 -ErrorAction SilentlyContinue | Where-Object {$_ -notlike 'TEACHER_METRICS_JSON *'} | ForEach-Object {Write-Host $_}
         }
     }
     $Status=Get-TeacherExitCode $Process
-    Get-Content -LiteralPath ($LogBase+'.stdout.log') -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object {Write-Host $_}
+    Get-Content -LiteralPath ($LogBase+'.stdout.log') -Tail 40 -ErrorAction SilentlyContinue | Where-Object {$_ -notlike 'TEACHER_METRICS_JSON *'} | ForEach-Object {Write-Host $_}
     if ($Status -ne 0) {
         Get-Content -LiteralPath ($LogBase+'.stderr.log') -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object {Write-Host $_}
         throw "Teacher experiment failed (exit $Status): $Label. Preserve results; repeat unchanged command. Logs: $LogBase"
     }
+    if ($ReturnLog) {return $LogBase}
 }
 function Invoke-TeacherWorker([string]$Action,[string]$Split='validation-10',[string]$Profile='old') {
     $Container='teacher-ofat-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
@@ -107,13 +108,34 @@ function Invoke-TeacherWorker([string]$Action,[string]$Split='validation-10',[st
         '--inference-image',$InferenceImage,'--evaluation-image',$EvaluationImage)
     Invoke-TeacherContainer $Arguments ($Action+'-'+$Profile) $Container
 }
-function Invoke-EvaluatorPermissionPreflight([string]$Split,[string]$Profile) {
+function Save-EvaluatorMessage([string]$LogBase,[string]$Tag,[string]$Path) {
+    $Lines=@(Get-Content -LiteralPath ($LogBase+'.stdout.log') | Where-Object {$_.StartsWith($Tag,[StringComparison]::Ordinal)})
+    if ($Lines.Count -ne 1) {throw 'Expected exactly one complete evaluator data message; retain launch logs.'}
+    $Json=$Lines[0].Substring($Tag.Length)
+    $null=$Json | ConvertFrom-Json
+    $Parent=Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+    [IO.File]::WriteAllText($Path,$Json,(New-Object System.Text.UTF8Encoding($false)))
+}
+function Invoke-EvaluatorRuntimeAudit([string]$RuntimePath) {
+    $Container='teacher-eval-runtime-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
+    $Arguments=@('run','--rm','--pull','never','--network','none','--platform','linux/amd64','--name',$Container,
+        '--cap-drop','ALL','--security-opt','no-new-privileges','--read-only',
+        '--tmpfs','/tmp:rw,nosuid,nodev,size=256m,mode=1777','--cpus','2','--env','PYTHONDONTWRITEBYTECODE=1',
+        '--mount',"type=bind,source=$PSScriptRoot,target=/repair-source,readonly",
+        '--entrypoint','/usr/bin/timeout',$EvaluationImage,'--signal=TERM','--kill-after=10s',
+        ([string]$JobTimeoutSeconds+'s'),'python','/repair-source/repair.py','--action','runtime')
+    $AuditLog=Invoke-TeacherContainer $Arguments 'evaluator-runtime' $Container -ReturnLog
+    Save-EvaluatorMessage $AuditLog 'TEACHER_EVALUATOR_RUNTIME ' $RuntimePath
+}
+function Invoke-EvaluatorPermissionPreflight([string]$Split,[string]$Profile,[string]$RuntimePath) {
     $Container='teacher-eval-preflight-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
     $Arguments=@('run','--rm','--pull','never','--network','none','--platform','linux/amd64','--name',$Container,
         '--cpus','2','--env','PYTHONUNBUFFERED=1','--env','PYTHONDONTWRITEBYTECODE=1',
         '--mount',"type=bind,source=$PackageRoot,target=/teacher-source,readonly",
         '--mount',"type=bind,source=$PSScriptRoot,target=/repair-source,readonly",
         '--mount',"type=bind,source=$SourceStudy,target=/study,readonly",
+        '--mount',"type=bind,source=$RuntimePath,target=/evaluator-runtime.json,readonly",
         '--mount',"type=bind,source=$OutputRoot,target=/results",
         '--entrypoint','/usr/bin/timeout',$InferenceImage,'--signal=TERM','--kill-after=10s',
         ([string]$JobTimeoutSeconds+'s'),'/opt/app/.pixi/envs/cuda/bin/python','/repair-source/repair.py',
@@ -124,7 +146,10 @@ function Invoke-TeacherEvaluation([string]$Split,[string]$Profile) {
     $ProfileRoot=Join-Path $OutputRoot ($Split+'\'+$Profile)
     $Ready=Get-Content -LiteralPath (Join-Path $ProfileRoot 'evaluation-ready.json') -Raw | ConvertFrom-Json
     if (-not $Ready.needs_evaluation) {Write-Host "METRICS VERIFIED CACHE $Split/$Profile";return}
-    Invoke-EvaluatorPermissionPreflight $Split $Profile
+    $Transport=Join-Path $OutputRoot ('permission-repair\transport\'+[Guid]::NewGuid().ToString('N').Substring(0,8))
+    $RuntimePath=Join-Path $Transport 'runtime.json'
+    Invoke-EvaluatorRuntimeAudit $RuntimePath
+    Invoke-EvaluatorPermissionPreflight $Split $Profile $RuntimePath
     $Pointer=Get-Content -LiteralPath (Join-Path $OutputRoot ('permission-repair\'+$Split+'\'+$Profile+'\latest.json')) -Raw | ConvertFrom-Json
     $ReceiptPath=[IO.Path]::GetFullPath((Join-Path $OutputRoot ([string]$Pointer.receipt).Replace('/','\')))
     if (-not $ReceiptPath.StartsWith($OutputRoot+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'Unsafe repair receipt path'}
@@ -133,23 +158,37 @@ function Invoke-TeacherEvaluation([string]$Split,[string]$Profile) {
     if ($Receipt.manifest_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $OutputRoot 'manifest.json')).Hash.ToLowerInvariant()) {throw 'Original manifest changed after preflight'}
     if ([string]$Receipt.owner_uid -notmatch '^\d+$' -or [string]$Receipt.owner_gid -notmatch '^\d+$') {throw 'Unsafe evaluator identity'}
     $WriterIdentity=([string]$Receipt.owner_uid)+':'+([string]$Receipt.owner_gid)
+    $Runtime=$Receipt.original_evaluator_runtime
+    if ([string]$Runtime.identity.uid -notmatch '^\d+$' -or [string]$Runtime.identity.gid -notmatch '^\d+$') {throw 'Original evaluator identity unavailable'}
+    $ScratchOptions='/output:rw,nosuid,nodev,size=128m,mode=0700,uid='+([string]$Runtime.identity.uid)+',gid='+([string]$Runtime.identity.gid)
     $Dataset=if ($Split -eq 'test-38') {$TestDataset} else {$ValidationDataset}
     $Container='teacher-eval-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
     $Arguments=@('run','--rm','--pull','never','--network','none','--platform','linux/amd64','--name',$Container,
-        '--user',$WriterIdentity,'--cap-drop','ALL','--security-opt','no-new-privileges','--read-only',
+        '--cap-drop','ALL','--security-opt','no-new-privileges','--read-only',
         '--tmpfs','/tmp:rw,nosuid,nodev,size=256m,mode=1777','--cpus','4',
-        '--env','GRAND_CHALLENGE_MAX_WORKERS=4','--env','HOME=/home/user',
-        '--env','PYTHONUSERBASE=/home/user/.local','--env','PYTHONDONTWRITEBYTECODE=1',
+        '--tmpfs',$ScratchOptions,'--env','GRAND_CHALLENGE_MAX_WORKERS=4','--env','PYTHONDONTWRITEBYTECODE=1',
         '--mount',"type=bind,source=$ProfileRoot,target=/input,readonly",
-        '--mount',"type=bind,source=$ProfileRoot\evaluation,target=/output",
         '--mount',"type=bind,source=$Dataset,target=/opt/app/ground_truth,readonly",
         '--mount',"type=bind,source=$PSScriptRoot,target=/repair-source,readonly",
         '--mount',"type=bind,source=$ReceiptPath,target=/repair-receipt.json,readonly",
         '--mount',"type=bind,source=$OutputRoot\manifest.json,target=/original-manifest.json,readonly",
         '--entrypoint','/usr/bin/timeout',$EvaluationImage,'--signal=TERM','--kill-after=10s',
         ([string]$JobTimeoutSeconds+'s'),'python','/repair-source/repair.py','--action','evaluate')
-    Write-Host "EVALUATOR WRITE IDENTITY $WriterIdentity (container only; no chmod/chown or host admin)"
-    Invoke-TeacherContainer $Arguments ('evaluate-'+$Profile) $Container
+    Write-Host "EVALUATOR ORIGINAL IDENTITY $($Runtime.identity.uid):$($Runtime.identity.gid); metrics publisher=$WriterIdentity"
+    $EvaluationLog=Invoke-TeacherContainer $Arguments ('evaluate-'+$Profile) $Container -ReturnLog
+    $ResponsePath=Join-Path $Transport 'metrics-response.json'
+    Save-EvaluatorMessage $EvaluationLog 'TEACHER_METRICS_JSON ' $ResponsePath
+    $Publisher='teacher-metrics-publish-'+[Guid]::NewGuid().ToString('N').Substring(0,12)
+    $PublishArguments=@('run','--rm','--pull','never','--network','none','--platform','linux/amd64','--name',$Publisher,
+        '--user',$WriterIdentity,'--cap-drop','ALL','--security-opt','no-new-privileges','--read-only',
+        '--tmpfs','/tmp:rw,nosuid,nodev,size=64m,mode=1777','--cpus','2','--env','PYTHONDONTWRITEBYTECODE=1',
+        '--mount',"type=bind,source=$PSScriptRoot,target=/repair-source,readonly",
+        '--mount',"type=bind,source=$ReceiptPath,target=/repair-receipt.json,readonly",
+        '--mount',"type=bind,source=$ResponsePath,target=/metrics-response.json,readonly",
+        '--mount',"type=bind,source=$OutputRoot,target=/results",
+        '--entrypoint','/usr/bin/timeout',$InferenceImage,'--signal=TERM','--kill-after=10s',
+        ([string]$JobTimeoutSeconds+'s'),'/opt/app/.pixi/envs/cuda/bin/python','/repair-source/repair.py','--action','publish')
+    Invoke-TeacherContainer $PublishArguments ('publish-'+$Profile) $Publisher
     Invoke-TeacherWorker 'record' $Split $Profile
 }
 try {

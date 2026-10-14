@@ -1,56 +1,55 @@
-教师评价器输出权限修复 v1
+教师评价器权限与依赖环境修复（运行流程v2，目录名沿用v1）
 
-适用错误：教师推理已经COMMITTED，评价器能读预测，但写/output/metrics.json时
-PermissionError。常见原因是推理镜像和评价镜像中同名user的数字UID/GID不同。
-新入口会记录实际目录owner、生产进程身份与权限，按实际目录owner运行评价器，
-不假定固定UID，不修改Windows ACL，不执行chmod/chown，更不设置777权限。
+适用错误
+1. 评价器能读预测，但写/output/metrics.json时PermissionError。
+2. 改为目录owner用户后，出现ModuleNotFoundError: psutil。
+   用户库可能安装在原镜像用户的专属路径，或新UID无权访问该HOME。
+   不再猜测/home/user/.local，也不安装/替换新包或放宽HOME权限。
 
-原实验不变
-diagnostics/teacher-single-factor-v1内所有文件、manifest.json、smoke收据及
-已完成的jobs都不修改。修复入口位于独立目录，继续挂载原包并运行原worker。
-原代码/镜像/权重/数据/配置/指标筛选规则/缓存哈希守卫保持启用。
-不构建/拉取镜像，不重新训练，不重新推理已验证病例；未完成的scaled仍会继续。
-不要手工改manifest.json来绕过脚本哈希检查，也不要换新目录丢掉已有预测。
+原实验保持不变
+diagnostics/teacher-single-factor-v1中的文件、manifest.json、smoke收据及
+已完成jobs均不修改。新流程仍挂载原包、调用原worker、冻结原镜像/代码/
+权重/数据/配置和筛选规则。只修复评价结果写入与传输，不重新定义指标。
 
-修复如何工作
-1. 原worker完成原输入守卫、逐病例缓存校验；完整预测通过后才准备评价。
-2. 单独CPU预检再次核对原包、原清单、10/38个病例及全部输出哈希；读取
-   evaluation目录owner的UID/GID，记录独立preflight收据。
-3. 只让评价容器使用该UID:GID。输入/真值/修复代码/收据/原清单均只读；
-   仅该profile的evaluation目录可写，容器根文件系统只读，临时/tmp为tmpfs。
-   去掉全部Linux capabilities并设置no-new-privileges；不使用privileged或宿主管理员。
-   若owner为0，也只是受限容器身份，不代表以Windows管理员运行。
-4. 更换UID后保留镜像原/home/user/.local里的依赖搜索路径，以免pip --user
-   安装的numpy/scipy等因HOME改变而找不到。不会安装新依赖。
-5. 核对镜像内四个正式评分Python文件与原研究的源哈希；先实际写入/删除
-   一个唯一临时探针，写入仍失败时在计算指标前停止，输出身份/owner证据。
-6. 使用同一Python解释器、同一评分代码、原预测时间戳计算正式指标；原worker
-   验证病例数量和metrics后提交完成标记。没有重新定义DSC/D98或改变模型耗时。
-7. 若有未验证/截断metrics.json，先逐字节另存快照；由目录owner在评价前
-   保留式改名为metrics.unverified-<ID>.json，防止旧文件自身权限继续阻塞写入。
-   已验证的指标绝不覆盖，旧失败日志也保留。
+分离“计算用户”和“结果写入用户”
+1. 用评价镜像的原默认用户做CPU依赖审计，实际导入numpy/scipy/pandas/psutil，
+   记录原HOME、sys.path、解释器、UID/GID、库版本/路径/文件哈希及正式评分源哈希。
+   不传--user，不覆盖HOME、PYTHONUSERBASE或PYTHONPATH。
+2. 在原推理镜像中核对清单、原包和所有已完成预测，生成新的独立preflight收据。
+3. 正式评价仍使用原评价镜像默认用户和原依赖环境，四个评分Python文件哈希
+   必须保持一致。输入/真值/代码/收据/清单只读；容器根文件系统只读；
+   只在该原用户拥有的私有/output tmpfs内写指标，另有受限/tmp tmpfs。
+   去掉全部Linux capabilities并设置no-new-privileges，不使用privileged。
+4. 指标原始UTF-8文本通过带标签的ASCII JSON数据消息输出到独立启动日志。
+   这是结果数据，不是编码脚本或PowerShell命令；无Invoke-Expression、Bypass。
+5. 原推理镜像中的stdlib-only写入进程采用实际evaluation目录owner的UID:GID，
+   校验清单、修复收据、结果SHA256、10/38个病例、指标有限性和原预测哈希，
+   然后逐字节原样写回metrics.json；不反序列化重算或重排浮点数字。
+6. 如有未验证/截断metrics，先快照并保留式改名为metrics.unverified-<ID>.json。
+   已验证指标绝不覆盖。原worker最终再验证并提交官方指标完成标记。
+7. 若原镜像用户也导入不了依赖，会在计算前停止并保留审计日志。
+   写入进程不导入numpy/scipy/psutil，不会再因HOME/UID切换隐藏用户库。
 
-远程运行：先拉取，再使用新入口，保持原OutputRoot不变。
+远程运行（原命令/原OutputRoot不变）
 git -C "C:\zhongliu\zhongliu-tuning" pull --ff-only origin main
 
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\teacher-eval-permission-fix-v1\run_repair.ps1" -Stage validation -Group weights
 
-预期先出现old的10个CACHE VERIFIED，而不是COMMITTED重新推理；之后是
-EVALUATOR PERMISSION PREFLIGHT、EVALUATOR WRITE IDENTITY、WRITE PROBE PASSED，
-再提交old指标并继续scaled。终端重复打印早先COMMITTED可能只是进度tail与最终
-日志tail重复显示，不代表重复推理；按每个case的verified.json/哈希确认缓存。
+预期先出现old的10个CACHE VERIFIED；随后START evaluator-runtime，
+EVALUATOR ORIGINAL RUNTIME PASSED、OFFICIAL METRICS PUBLISHED BYTE-IDENTICAL，
+再提交old指标并继续scaled。不用删除结果、换目录、重跑smoke或构建镜像。
+所有分组及select/test均继续使用这个入口；父对照缓存/验证选择规则不变。
+终端进度tail与最终tail可能重复显示同一旧日志，不代表重复推理。
 
-后续教师分组也使用这个run_repair.ps1，其他参数/分组/选择/test流程与原入口相同。
-PackageRoot默认仓库/diagnostics/teacher-single-factor-v1，绝不指向修复包。
-Group及Stage不会自动扩大；仍需先验证、显式select，再显式test。
-
-证据位置（默认原结果目录C:\zhongliu\teacher-single-factor-v1-results）
-permission-repair/<split>/<profile>/<8位ID>/preflight.json
-permission-repair/<split>/<profile>/latest.json（收据位置与SHA256）
-<split>/<profile>/evaluation/permission-repair-receipt.json
-如有旧未验证指标，preflight同目录保存previous-unverified-metrics.json。
+证据位置（默认C:\zhongliu\teacher-single-factor-v1-results）
+permission-repair/transport/<ID>/runtime.json：原用户/解释器/依赖审计
+permission-repair/transport/<ID>/metrics-response.json：原始指标文本及SHA256
+permission-repair/<split>/<profile>/<ID>/preflight.json：预测与原包校验
+<split>/<profile>/evaluation/permission-repair-receipt.json：计算/写入双方身份及字节一致证明
+所有旧修复收据、失败日志和未验证指标快照保留；原manifest不改写。
 
 本地测试
 python -m unittest discover -s diagnostics/teacher-eval-permission-fix-v1 -p "test_*.py" -v
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File diagnostics/teacher-eval-permission-fix-v1/test_launcher.ps1
-测试不使用本地Docker/GPU；远程容器的实际写权限由运行时写入探针确认。
+本地不使用Docker/GPU；测试模拟不同计算/写入UID，验证原环境保持和逐字节传输，
+并拒绝被篡改/病例不全/依赖变更的结果。远程实际依赖由原用户审计确认。
