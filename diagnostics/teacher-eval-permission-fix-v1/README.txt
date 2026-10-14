@@ -1,4 +1,4 @@
-教师评价器权限与依赖环境修复（运行流程v2，目录名沿用v1）
+教师评价器权限/依赖与norm输入类型修复（运行流程v3，目录名沿用v1）
 
 适用错误
 1. 评价器能读预测，但写/output/metrics.json时PermissionError。
@@ -47,6 +47,23 @@ permission-repair/transport/<ID>/metrics-response.json：原始指标文本及SH
 permission-repair/<split>/<profile>/<ID>/preflight.json：预测与原包校验
 <split>/<profile>/evaluation/permission-repair-receipt.json：计算/写入双方身份及字节一致证明
 所有旧修复收据、失败日志和未验证指标快照保留；原manifest不改写。
+
+norm输入类型修复
+适用Input type (double) and bias type (float) should be the same。
+原predictor先将数组转float32，但np.percentile返回float64边界；NumPy 2的
+归一化运算又把数组提升为float64，未转回就送入float32模型。
+不改原冻结predictor.py/worker.py或manifest，使用独立norm_dtype.py代理入口。
+仅infer-norm在内存中替换preprocess：同一1/99百分位、同一裁剪与0-255缩放，
+在原bilinear图像插值前显式转回float32。raw各组调用原worker/原preprocess。
+权重、查询点、教师推理、掩膜重建和评分器都不改；不新增科学实验因素。
+dtype-repair/<split>/norm.json记录修复代码哈希、原包/清单、版本、公式和病例。
+每个新norm诊断payload记录实际百分位边界、插值前/后的dtype、视频张量SHA256；
+随后用原commit规则校验包括该诊断在内的所有输出。续跑/记录/汇总/筛选时核对
+norm专属凭据；已完成且没有这份凭据的旧norm缓存拒绝混用、不覆盖。
+原包、manifest、old/scaled/grid0/grid10/iter2/iter6等已有预测/指标不改，
+无需新OutputRoot、删除缓存、重跑smoke、构建镜像或安装/降级numpy。
+
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\teacher-eval-permission-fix-v1\run_repair.ps1" -Stage validation -Group core
 
 本地测试
 python -m unittest discover -s diagnostics/teacher-eval-permission-fix-v1 -p "test_*.py" -v

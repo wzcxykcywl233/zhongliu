@@ -29,7 +29,7 @@ function global:Start-Process {
     if ($Index -ge 0) {
         $Action=$Arguments[$Index+1]
         if ($Action -eq 'plan') {
-            $Plan='{"profiles":[{"Profile":"old","Group":"weights","Parent":null},{"Profile":"scaled","Group":"weights","Parent":"old"},{"Profile":"grid0","Group":"core","Parent":"scaled"}]}'
+            $Plan='{"profiles":[{"Profile":"old","Group":"weights","Parent":null},{"Profile":"scaled","Group":"weights","Parent":"old"},{"Profile":"grid0","Group":"core","Parent":"scaled"},{"Profile":"norm","Group":"core","Parent":"grid0"}]}'
             [IO.File]::WriteAllText((Join-Path $Global:TeacherOutput 'plan.json'),$Plan)
             [IO.File]::WriteAllText((Join-Path $Global:TeacherOutput 'manifest.json'),'{"mock":1}')
         }
@@ -96,13 +96,14 @@ try {
             $UserIndex=[Array]::IndexOf($Arguments,'--user')
             if ($ReadOnly -ne 3 -or $UserIndex -lt 0 -or $Arguments[$UserIndex+1] -ne '997:998') {throw 'Only publisher adopts actual output owner'}
         } else {
-            if ($ReadOnly -ne 7) {throw 'Original worker input mounts changed'}
+            if ($ReadOnly -ne 8) {throw 'Original worker inputs and separate norm repair mount must be read-only'}
             if ($Arguments -notcontains ('type=bind,source='+$OriginalPackage+',target=/teacher-source,readonly')) {throw 'Original frozen package was replaced by repair package'}
+            if ($Arguments -notcontains '/repair-source/norm_dtype.py') {throw 'Separate dtype wrapper missing'}
             if ($Arguments -contains '--user') {throw 'Inference/worker identity changed'}
         }
     }
-    if (($Actions -join ',') -ne 'plan,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,report') {throw 'Ancestor order/evaluation handoff failed'}
-    if ($Global:TeacherCalls.Count -ne 20) {throw 'Unexpected job count'}
+    if (($Actions -join ',') -ne 'plan,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,infer,runtime,prepare,evaluate,publish,record,report') {throw 'Ancestor order/evaluation handoff failed'}
+    if ($Global:TeacherCalls.Count -ne 26) {throw 'Unexpected job count'}
     [IO.File]::WriteAllText((Join-Path $Output 'selection.json'),'{"test_profiles":["old","scaled"]}')
     $Global:TeacherCalls.Clear()
     & (Join-Path $PSScriptRoot 'run_repair.ps1') @Parameters -Stage test

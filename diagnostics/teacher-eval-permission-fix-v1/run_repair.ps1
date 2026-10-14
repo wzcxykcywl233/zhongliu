@@ -1,4 +1,4 @@
-# Evaluation-only permission repair; original frozen package is mounted unchanged.
+# Evaluator identity repair plus norm-only float32 repair; frozen package remains unchanged.
 [CmdletBinding()]
 param(
     [ValidateSet('plan','smoke','validation','select','test')][string]$Stage='validation',
@@ -98,10 +98,11 @@ function Invoke-TeacherWorker([string]$Action,[string]$Split='validation-10',[st
         '--mount',"type=bind,source=$ValidationDataset,target=/datasets/validation,readonly",
         '--mount',"type=bind,source=$TestDataset,target=/datasets/test,readonly",
         '--mount',"type=bind,source=$PackageRoot,target=/teacher-source,readonly",
+        '--mount',"type=bind,source=$PSScriptRoot,target=/repair-source,readonly",
         '--mount',"type=bind,source=$OutputRoot,target=/results")
     if ($Action -in @('infer','smoke')) {$Arguments+=@('--gpus','device=0')}
     $Arguments+=@('--entrypoint','/usr/bin/timeout',$InferenceImage,'--signal=TERM','--kill-after=10s',
-        ([string]$JobTimeoutSeconds+'s'),'/opt/app/.pixi/envs/cuda/bin/python','/teacher-source/worker.py',
+        ([string]$JobTimeoutSeconds+'s'),'/opt/app/.pixi/envs/cuda/bin/python','/repair-source/norm_dtype.py',
         '--action',$Action,'--split',$Split,'--profile',$Profile,'--group',$Group,
         '--protocol','/protocol','--study','/study','--weights','/weights','--output','/results',
         '--train','/datasets/train','--validation','/datasets/validation','--test','/datasets/test',
@@ -192,7 +193,7 @@ function Invoke-TeacherEvaluation([string]$Split,[string]$Profile) {
     Invoke-TeacherWorker 'record' $Split $Profile
 }
 try {
-    Write-Host "Teacher evaluation permission repair stage=$Stage group=$Group; original package remains frozen. No student training, Mamba, build, pull or network."
+    Write-Host "Teacher evaluator / norm-float32 repair stage=$Stage group=$Group; original package remains frozen. No student training, Mamba, build, pull or network."
     Invoke-TeacherWorker 'plan'
     if ($Stage -eq 'plan') {
         (Get-Content -LiteralPath (Join-Path $OutputRoot 'plan.json') -Raw | ConvertFrom-Json).profiles |

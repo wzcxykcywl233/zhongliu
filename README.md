@@ -19,6 +19,10 @@ The evaluator keeps its original image user and dependencies and computes into
 private scratch output; a separate directory-owner writer publishes byte-identical
 metrics with SHA256 checks. This also fixes `psutil` lookup after UID changes.
 No chmod/chown, dependency installation, image build or retraining.
+The same repair entry also fixes NumPy 2 float64 promotion in the `norm` arm:
+unchanged percentile arithmetic is cast to float32 **before** the original resize.
+Other arms, frozen package and completed results remain unchanged. Norm-only repair
+and per-case dtype provenance are verified separately; rerun with `-Group core`.
 
 ### Dynamic anchors and frozen-Transformer feature sidecars
 
