@@ -11,6 +11,13 @@ and explicit `-Stage test` produce a separate 38-case **teacher-generator** repo
 not student performance. First-frame boundary queries only; arbitrary-time training
 adaptation is deliberately not assumed. See [design and commands](diagnostics/teacher-single-factor-v1/README.txt).
 
+If the evaluator fails to write `/output/metrics.json` with `PermissionError`, use
+the separate [evaluation permission repair](diagnostics/teacher-eval-permission-fix-v1/README.txt)
+entry `diagnostics/teacher-eval-permission-fix-v1/run_repair.ps1 -Stage validation -Group weights`.
+It preserves the original frozen package, manifest and completed predictions,
+matches only the evaluator's container identity to the actual output owner, and
+checks writing before calculating metrics. No chmod/chown, image build or retraining.
+
 ### Dynamic anchors and frozen-Transformer feature sidecars
 
 Two independent 40/10/38 studies are ready in `scripts/run_anchor_and_sidecar_queues.ps1`.
