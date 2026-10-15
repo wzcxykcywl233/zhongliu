@@ -13,6 +13,7 @@ import signal
 import socket
 import sys
 import json
+import time
 
 import numpy as np
 import argparse
@@ -61,6 +62,10 @@ from cotracker.models.core.cotracker.backbone_growth import (
     ARCHITECTURES, warm_start, save_json, repair_audit_tail,
 )
 from cotracker.utils.resumable_loader import set_resumable_loader_epoch
+from cotracker.utils.offline_teacher_policy import (
+    POLICIES as OFFLINE_POLICIES, SETTINGS as OFFLINE_SETTINGS,
+    offline_teacher_forward, label_audit, tensor_sha,
+)
 from cotracker.models.core.cotracker.feature_sidecar import (
     set_sidecar_training_mode, assert_sidecar_training_mode,
 )
@@ -170,6 +175,7 @@ def _forward_batch_single_teacher(
     # So we sample these points and discard them thereafter
 
     teacher_model_type, teacher_model = teacher_models[teacher_model_ind]
+    teacher_study = getattr(args, 'teacher_student_study', False)
     uniform_size = grid_size = sift_size = 0
     queries_cat = queries.clone()
     if "online" in teacher_model_type:
@@ -196,7 +202,16 @@ def _forward_batch_single_teacher(
     else:
         raise ValueError(f"Model type {teacher_model_type} doesn't exist")
 
-    if "cotracker_three" in teacher_model_type:
+    if teacher_study:
+        torch.cuda.synchronize(video.device)
+        teacher_started = time.perf_counter()
+    if teacher_study and teacher_model_type == 'offline_cotracker_three':
+        # The 100 support queries above were still drawn in every arm. This
+        # preserves the student/next-step RNG sequence when grid0 drops them.
+        trajs_g, vis_g, confidence = offline_teacher_forward(
+            teacher_model, video, queries, xy, args.offline_teacher_policy)
+        uniform_size = 0  # The adapter already returned target points only.
+    elif "cotracker_three" in teacher_model_type:
         with torch.no_grad():
             (
                 trajs_g,
@@ -214,6 +229,14 @@ def _forward_batch_single_teacher(
         trajs_g = trajs_g[:, :, : -(grid_size**2) - sift_size - uniform_size]
         vis_g = vis_g[:, :, : -(grid_size**2) - sift_size - uniform_size]
         confidence = confidence[:, :, : -(grid_size**2) - sift_size - uniform_size]
+
+    if teacher_study:
+        torch.cuda.synchronize(video.device)
+        batch.teacher_label_audit = label_audit(
+            video, queries, trajs_g, vis_g, confidence,
+            policy=args.offline_teacher_policy, teacher_type=teacher_model_type,
+            support_draw_sha256=tensor_sha(queries_cat[:, queries.shape[1]:]),
+            seconds=time.perf_counter() - teacher_started)
 
     vis_g = vis_g > 0.9
 
@@ -541,6 +564,8 @@ def forward_batch(batch, model, args, teacher_models, teacher_sampler):
             .tobytes()
         ).hexdigest(),
     }
+    if getattr(args, 'teacher_student_study', False):
+        primary_output['teacher_sampling']['label_audit'] = primary_batch.teacher_label_audit
     return primary_output
 
 
@@ -712,6 +737,10 @@ class Lite(LightningLite):
             else:
                 raise ValueError(f"Unsupported teacher type: {teacher_type}")
 
+        if args.teacher_student_study:
+            for _, teacher in teacher_models:
+                teacher.requires_grad_(False)
+
         if args.trackrad_data_dir:
             from cotracker.datasets.trackrad_video_dataset import TrackRADVideoDataset
 
@@ -802,6 +831,10 @@ class Lite(LightningLite):
                         raise ValueError('resume checkpoint has a different backbone architecture')
                     if loaded.get('feature_sidecar', 'none') != args.feature_sidecar:
                         raise ValueError('resume checkpoint has a different feature sidecar')
+                    previous = loaded['experiment']
+                    if (previous.get('teacher_student_study', False) != args.teacher_student_study or
+                        (args.teacher_student_study and previous.get('offline_teacher_policy') != args.offline_teacher_policy)):
+                        raise ValueError('resume checkpoint has a different teacher intervention')
                     ckpt_path, ckpt = candidate, loaded
                     break
                 if ckpt is None:
@@ -945,6 +978,10 @@ class Lite(LightningLite):
 
                 optimizer.zero_grad()
 
+                if args.teacher_student_study:
+                    torch.cuda.synchronize()
+                    training_step_started = time.perf_counter()
+
                 if args.feature_sidecar != 'none':
                     assert_sidecar_training_mode(_unwrap_model(model))
                 else:
@@ -1075,6 +1112,11 @@ class Lite(LightningLite):
                             'auxiliary_index': teacher_info['auxiliary_index'],
                             'loss': float(loss.detach().cpu()),
                         }
+                        if args.teacher_student_study:
+                            torch.cuda.synchronize()
+                            record['teacher_policy'] = args.offline_teacher_policy
+                            record['label_audit'] = teacher_info['label_audit']
+                            record['step_seconds'] = time.perf_counter() - training_step_started
                         with open(Path(args.ckpt_path) / 'paired-steps.jsonl', 'a', encoding='utf-8') as stream:
                             stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + '\n')
                             stream.flush()
@@ -1115,6 +1157,8 @@ class Lite(LightningLite):
                 final = {'model': final, 'backbone_architecture': args.backbone_architecture,
                          'feature_sidecar': args.feature_sidecar,
                          'architecture_report': architecture_report, 'total_steps': total_steps}
+                if args.teacher_student_study:
+                    final['teacher_student_policy'] = args.offline_teacher_policy
             torch.save(final, PATH + '.tmp')
             with open(PATH + '.tmp', 'rb') as stream:
                 os.fsync(stream.fileno())
@@ -1140,6 +1184,9 @@ if __name__ == "__main__":
                         help='freeze base; train a rich-feature residual before frozen output heads')
     parser.add_argument('--backbone_growth_study', action='store_true',
                         help='paired full-model depth study with checked pretrained initialization and structured step audits')
+    parser.add_argument('--teacher_student_study', action='store_true',
+                        help='paired offline-teacher intervention; student architecture unchanged')
+    parser.add_argument('--offline_teacher_policy', choices=OFFLINE_POLICIES, default='old')
     parser.add_argument("--ckpt_path", help="path to save checkpoints")
     parser.add_argument(
         "--batch_size", type=int, default=4, help="batch size used during training."
@@ -1502,6 +1549,16 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    if args.teacher_student_study:
+        if (not args.backbone_growth_study or args.backbone_architecture != 'base' or
+            args.feature_sidecar != 'none' or not args.trackrad_data_dir or args.batch_size != 1 or
+            args.teacher_types != ['cotracker2v1', 'online_cotracker_three', 'offline_cotracker_three']):
+            parser.error('teacher study requires paired base, no sidecar, TrackRAD, batch=1 and the original ordered three-teacher pool')
+        expected = OFFLINE_SETTINGS[args.offline_teacher_policy][0]
+        if Path(args.teacher_offline_ckpt).name != expected:
+            parser.error('offline checkpoint does not match the selected teacher policy')
+    elif args.offline_teacher_policy != 'old':
+        parser.error('teacher intervention requires --teacher_student_study')
     if args.feature_sidecar != 'none' and (not args.backbone_growth_study or args.backbone_architecture != 'base'
         or args.auxiliary_teacher_weight != 0 or args.trackrad_mask_supervision_weight != 0
         or args.confidence_target_mode != 'hard' or args.mamba_time_replacement or args.mamba_trajectory_refiner):

@@ -1,0 +1,83 @@
+新教师 -> 学生：首轮配对实验 v1
+
+目的
+老师的38例掩膜表现改善，不等于学生一定会改善。这一轮只检验离线教师
+改动能否改善学生；同时测量伪标签是否真的变化、训练耗时和微调退化。
+学生、另外两位教师、教师抽样概率、病例/视频/查询/支持点随机序列全部固定。
+不使用 Mamba、软置信度标签、额外辅助教师或真实掩膜训练损失。
+
+四组（只替换原三教师池中的 offline_cotracker_three）
+old     baseline_offline 权重 + 100个随机支持点 + 4次迭代，配对训练对照。
+scaled  只将 old 的权重换成 scaled_offline。
+grid0   在 scaled 上只去掉100个支持点，仍消耗同样的随机抽样，不干扰学生RNG。
+iter6   在 grid0 上只将教师迭代次数由4改为6。
+学生始终使用 scaled_offline 初始化、原25.39M结构和原训练配方
+（vis_conf_head仍按原配方冻结，并非声称所有参数都更新），学习率5e-5、
+10帧/384查询/4次学生迭代，教师V>.9硬阈值和原损失不变。
+CoTracker2/online3 教师及原抽样顺序均不改；只有约1/3的步骤受到干预。
+
+为什么本轮暂不直接接 diverse/span5
+原教师单因素研究只验证了首帧250个轮廓点。训练在视频内随机时刻、随机空间
+采样384个查询点，且现有训练预处理为robust归一化，原教师评估默认raw。
+所以这里是相同训练条件下的新干预研究，不能把此前teacher-generator分数
+当成这里随机查询伪标签的精度或当成学生成绩。
+已有hierarchical_forward_pass会重置查询时刻，不能直接使用；也不能把查询
+时刻改零来掩盖不兼容。逐查询时刻分组/双向运行又会显著增大标签生成成本，
+需要独立适配和配对对照，待本轮验证收益后再做。不修改原32组教师研究。
+
+阶段（命令均为单行；在远程机器执行）
+默认新短目录 C:\zhongliu\ts-v1，原实验目录不修改。
+plan：仅核验40/10/38数量、病例互斥，冻结源码/权重/数据哈希，无Docker运行。
+smoke：GPU验证四组随机时刻查询输出与直接调用严格一致；种子0每组训练5步，
+       覆盖全部3个教师槽位；审计同病例/视频/查询/支持点及未修改教师标签；
+       最后在正式推理镜像中加载四组新权重，实际做GPU学生推理冒烟。
+pilot：种子0四组各125步，随后只跑10例验证；需smoke完成，不跑38例。
+       这是独立125步学习率计划，不是1000步训练的前缀，不将其续接到full。
+train：种子0/1/2四组各1000步；需pilot完成，显式启动，不自动接长训练。
+       若pilot三个新教师组均未超过未训练参照DSC，默认停止，先检查退化；
+       确有必要继续时可明确加 -AllowDegradedPilot，决定会记录，不更改结果。
+validation：只评价已完成full训练，不隐式启动/补跑训练。
+test：full验证、权重、输出审计完成后显式跑38例。四组预先声明，全部报告，
+      不基于测试分数挑种子、挑配置或改变样本。10例结果绝不替代38例正式表现。
+
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_teacher_student_resumable.ps1" -Stage plan
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_teacher_student_resumable.ps1" -Stage smoke
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\scripts\run_teacher_student_resumable.ps1" -Stage pilot
+之后分别运行 -Stage train、-Stage validation、-Stage test，不要一次拼接命令。
+
+运行环境与停止规则
+只复用本机已有镜像，首次会COPY当前源码建立派生镜像；网络关闭，不安装包，
+不下载/拉取镜像。默认训练运行时trackrad-cotracker-gt-mask-training:latest，
+推理运行时trackrad-algorithm-cotracker-algorithm:latest。若已删除，使用参数
+-TrainingRuntimeImage / -InferenceRuntimeImage 指定本地已有兼容镜像；
+先plan再smoke，冻结后不能悄悄替换镜像/代码/数据/权重。
+Docker Desktop必须已启动。结果根目录应短且不放在旧实验目录里。
+GPU每组训练进程默认7200秒超时；每步计时在取出数据之后、保存权重之前，
+所以不等于端到端墙钟时间。前两步以外中位时间超过15秒时审计不通过，
+不会进入下阶段。可在开始新研究前设置预算；不承诺固定总运行时长。
+断电后重跑同一命令，使用原来完整的模型/优化器/调度器/教师RNG/数据位置。
+不通过删除日志、降低配对要求或把pilot导入full来绕过审计。
+
+主要产物
+smoke/gpu-teacher-proof.json：实际GPU模块和随机查询兼容性证明。
+pilot/label-runtime-diagnostics.csv：按种子/策略/教师槽位的速度、V>.9比例、
+置信度、越界率；仅诊断，不当作有GT对应的跟踪精度。
+pilot/training-audit.json：全部更新覆盖、原始P/V/C标签变化步骤数、权重SHA。
+pilot/validation-10/teacher-student-summary.csv：短试验均值，单种子SD=0并非稳定。
+full/validation-10 和 full/test-38：
+  teacher-student-results.csv           各种子、各组及未训练参照的官方指标。
+  teacher-student-summary.csv           DSC/HD95/MASD/CD/D98/TimeSec均值和样本SD。
+  teacher-student-paired-deltas.csv      同种子新教师组相对旧教师训练组/直接父组。
+  teacher-student-paired-summary.csv     配对差值均值/样本SD。
+  teacher-student-paired-cases.csv       同种子同病例差值，避免均值掩盖失败病例。
+pretrained只有一个固定权重，不将复制三份参照称为三个独立种子。
+评估使用同一个已冻结的hierarchical_full_grid0_iterations2_memory_topk_diverse
+推理配置（1000个轮廓点），不在本轮同时调整学生推理参数。
+
+如何判断
+scaled-old、grid0-scaled、iter6-grid0回答单点改进是否传递；
+各新教师组-old回答完整教师方案是否有用；
+所有训练组-pretrained回答“比旧教师训练好”是否仍未摆脱微调退化。
+如果仅优于退化后的old组，却低于未训练参照，不能称为当前方法提升。
+同时查看3种子方向、逐病例失败、D98是否退化、耗时，而不只按DSC排序。
+test-38已被反复观察，不宣称新盲测、患者独立性或显著性。
