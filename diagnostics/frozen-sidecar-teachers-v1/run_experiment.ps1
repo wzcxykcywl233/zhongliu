@@ -3,7 +3,7 @@ param(
     [ValidateSet('plan','smoke','train','validation','test','all')][string]$Stage='plan',
     [string]$RepoRoot='C:\zhongliu\zhongliu-tuning',
     [string]$PriorStudy='C:\zhongliu\ts-v1',
-    [string]$OutputRoot='C:\zhongliu\fst-v1'
+    [string]$OutputRoot='C:\zhongliu\fst-runtimefix-v2'
 )
 $ErrorActionPreference='Stop'
 $RepoRoot=(Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\')
@@ -11,7 +11,7 @@ $PriorStudy=(Resolve-Path -LiteralPath $PriorStudy).Path.TrimEnd('\')
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
 $PackageRoot=$PSScriptRoot
 if ($OutputRoot.Length -gt 40 -or [IO.Path]::GetPathRoot($OutputRoot) -eq $OutputRoot+'\') {
-    throw 'Use a short dedicated OutputRoot, at most 40 characters, e.g. C:\zhongliu\fst-v1.'
+    throw 'Use a short dedicated OutputRoot, at most 40 characters, e.g. C:\zhongliu\fst-runtimefix-v2.'
 }
 foreach ($Path in @($RepoRoot,$PriorStudy,$OutputRoot,$PackageRoot)) {
     if ($Path -match '[",\r\n]') { throw 'Quotes, commas and newlines in paths are unsupported.' }

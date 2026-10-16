@@ -43,7 +43,16 @@ Mamba 统一 compact 扫描、gain=1、无位移截断、无 block checkpoint。
 连续 5 步中位数超过 8 秒（前 2 步预热除外），或显存峰值超过 20GiB/余量少于 2GiB，会停止。
 每个 smoke 进程 10 分钟上限，每个完整训练进程 4 小时上限；这些是异常保护，不是耗时预测。
 CPU 审计、GPU 训练和推理的时间不同，不能拿训练步时间代替端到端耗时。
-默认输出用短路径 C:\zhongliu\fst-v1，避免之前的 Windows 长路径问题。
+默认输出用短路径 C:\zhongliu\fst-runtimefix-v2，避免之前的 Windows 长路径问题。
+
+2026-10-16 运行镜像校验修复
+旧检查误把仓库顶层 tests/*.py 当作镜像必须包含的文件；两个 reuse Dockerfile 都没有复制这个目录。
+运行检查现严格对应镜像 COPY 范围：根目录 *.py 及 ext/co-tracker、resources、experiments 下的 Python 文件。
+这些范围内的文件缺失或哈希不同依旧停止；实际加载的支线模块仍须位于 /opt/app。
+整个仓库（包括测试文件）的来源校验仍保留，冻结主干/配对输入/标签/指标校验没有降低。
+原 C:\zhongliu\fst-v1 在训练前失败，不修改其中 manifest、不删除任何内容。
+修复包的指纹会变化，所以默认切换到 fst-runtimefix-v2；先重新 smoke，再在同一个新目录运行 all。
+不需要重建镜像、下载环境或重新进行旧实验；四组教师与固定学生设置不变。
 
 远程运行（先 git pull，保持 Docker Desktop 开启）
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\frozen-sidecar-teachers-v1\run_experiment.ps1" -Stage smoke
@@ -54,9 +63,9 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhong
 代码或数据指纹变化时使用正确旧 checkout 或新结果目录，禁止删除指纹绕过检查。
 
 最小回传
-Get-Content -LiteralPath "C:\zhongliu\fst-v1\full\test-38\frozen-sidecar-teachers-summary.csv"
-Get-Content -LiteralPath "C:\zhongliu\fst-v1\full\test-38\frozen-sidecar-teachers-paired-deltas.csv"
-Get-Content -LiteralPath "C:\zhongliu\fst-v1\full\label-runtime-diagnostics.csv"
+Get-Content -LiteralPath "C:\zhongliu\fst-runtimefix-v2\full\test-38\frozen-sidecar-teachers-summary.csv"
+Get-Content -LiteralPath "C:\zhongliu\fst-runtimefix-v2\full\test-38\frozen-sidecar-teachers-paired-deltas.csv"
+Get-Content -LiteralPath "C:\zhongliu\fst-runtimefix-v2\full\label-runtime-diagnostics.csv"
 还会生成逐病例差值、三种子差值均值/SD、每项改善种子数及来源审计。
 
 先回答的三个问题

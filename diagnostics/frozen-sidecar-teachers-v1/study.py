@@ -83,21 +83,38 @@ def prepare(root, prior, package, weights, datasets):
     print('PLAN VERIFIED: frozen Mamba; old/scaled/grid0/iter6; 60 frames / 128 queries; 40/10/38 disjoint', flush=True)
 
 
+def verify_runtime_sources(app, source_hashes):
+    # Mirror Dockerfile.training.reuse and Dockerfile.inference.reuse COPY scope.
+    # prepare() still checks the entire checkout inventory, including top-level tests.
+    # Never skip a missing file within a copied tree: that indicates a stale image.
+    hashes = {}
+    prefix = 'cotracker-algorithm/'
+    copied_trees = ('ext/co-tracker/', 'resources/', 'experiments/')
+    for relative, digest in source_hashes.items():
+        if not relative.startswith(prefix) or not relative.endswith('.py'):
+            continue
+        inside = relative[len(prefix):]
+        if '/' in inside and not inside.startswith(copied_trees):
+            continue
+        path = app / inside
+        if not path.is_file():
+            raise ValueError('Runtime source missing from pinned image: ' + relative)
+        if sha(path) != digest:
+            raise ValueError('Runtime source mismatch: ' + relative)
+        hashes[relative] = digest
+    if not hashes:
+        raise ValueError('Runtime source inventory is empty')
+    return hashes
+
+
 def runtime(root, kind):
     manifest = read(root / 'manifest.json')
-    # Both environments must execute the complete copied Python source, not an old wheel.
-    hashes = {}
-    for relative, digest in manifest['source_sha256'].items():
-        prefix = 'cotracker-algorithm/'
-        if relative.startswith(prefix) and relative.endswith('.py'):
-            path = APP / relative[len(prefix):]
-            if sha(path) != digest:
-                raise ValueError('Runtime source mismatch: ' + relative)
-            hashes[relative] = digest
+    hashes = verify_runtime_sources(APP, manifest['source_sha256'])
     from cotracker.models.core.cotracker import feature_sidecar
     if APP.resolve() not in Path(feature_sidecar.__file__).resolve().parents:
         raise ValueError('Wrong installed CoTracker module loaded')
-    frozen(root / ('runtime-' + kind + '.json'), {'complete': True, 'source_sha256': hashes})
+    frozen(root / ('runtime-' + kind + '.json'), {'complete': True,
+           'scope': 'reuse-dockerfiles-python-copy-scope-v2', 'source_sha256': hashes})
     print('RUNTIME VERIFIED ' + kind, flush=True)
 
 

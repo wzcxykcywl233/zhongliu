@@ -95,6 +95,59 @@ class EvidenceTests(unittest.TestCase):
         for r in rows: r['step_seconds'] = 25.
         with self.assertRaisesRegex(ValueError, 'slow'): self.parse(rows)
 
+    def runtime_fixture(self):
+        app = self.root / 'image/opt/app'
+        copied = ('model.py', 'inference.py', 'resources/model.py',
+                  'experiments/profile_sidecar_speed.py', 'experiments/tests/probe.py',
+                  'ext/co-tracker/train_on_real_data.py',
+                  'ext/co-tracker/cotracker/models/core/cotracker/feature_sidecar.py',
+                  'ext/co-tracker/tests/test_model.py')
+        hashes = {}
+        for relative in copied:
+            path = app / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# copied runtime fixture', encoding='utf-8')
+            hashes['cotracker-algorithm/' + relative] = protocol.sha(path)
+        # These are still checked against the checkout by prepare(), not against
+        # images whose Dockerfiles do not COPY these directories.
+        for relative in ('cotracker-algorithm/tests/test_adaptive_anchor.py',
+                         'cotracker-algorithm/tests/test_feature_sidecar.py',
+                         'cotracker-algorithm/resources-other/not_copied.py',
+                         'evaluation/evaluate.py', 'scripts/probe.py'):
+            hashes[relative] = 'a' * 64
+        return app, copied, hashes
+
+    def test_runtime_checks_exact_copy_scope_without_requiring_top_level_tests(self):
+        app, copied, hashes = self.runtime_fixture()
+        write(self.root / 'manifest.json', {'source_sha256': hashes})
+        from cotracker.models.core.cotracker import feature_sidecar
+        module = app / 'ext/co-tracker/cotracker/models/core/cotracker/feature_sidecar.py'
+        with patch.object(study, 'APP', app), patch.object(feature_sidecar, '__file__', str(module)):
+            for kind in ('Training', 'Inference'):
+                study.runtime(self.root, kind)
+                proof = protocol.read(self.root / ('runtime-' + kind + '.json'))
+                self.assertTrue(proof['complete'])
+                self.assertEqual(set(proof['source_sha256']), {'cotracker-algorithm/' + p for p in copied})
+            with patch.object(feature_sidecar, '__file__', '/old-wheel/feature_sidecar.py'):
+                with self.assertRaisesRegex(ValueError, 'Wrong installed'):
+                    study.runtime(self.root, 'Training')
+
+    def test_runtime_still_rejects_every_missing_or_changed_copied_file(self):
+        app, copied, hashes = self.runtime_fixture()
+        for relative in copied:
+            with self.subTest(relative=relative):
+                path = app / relative
+                original = path.read_bytes()
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, 'Runtime source missing'):
+                    study.verify_runtime_sources(app, hashes)
+                path.write_bytes(b'# different runtime')
+                with self.assertRaisesRegex(ValueError, 'Runtime source mismatch'):
+                    study.verify_runtime_sources(app, hashes)
+                path.write_bytes(original)
+        with self.assertRaisesRegex(ValueError, 'inventory is empty'):
+            study.verify_runtime_sources(app, {'cotracker-algorithm/tests/test_adaptive_anchor.py': 'a' * 64})
+
     def test_trainer_adapter_retains_freezing_and_teacher_checks(self):
         path = REPO / 'cotracker-algorithm/ext/co-tracker/train_on_real_data.py'
         source = path.read_text(encoding='utf-8')
@@ -173,6 +226,13 @@ class EvidenceTests(unittest.TestCase):
         trainer = checkout / 'cotracker-algorithm/ext/co-tracker/train_on_real_data.py'
         trainer.parent.mkdir(parents=True)
         trainer.write_text('# frozen trainer fixture')
+        repository_test = checkout / 'cotracker-algorithm/tests/test_adaptive_anchor.py'
+        repository_test.parent.mkdir(parents=True)
+        repository_test.write_text('# repository test remains audited')
+        package = self.root / 'package'
+        package.mkdir()
+        package_script = package / 'study.py'
+        package_script.write_text('# package revision one')
         helper = checkout / 'diagnostics/frozen-teacher-full-v1/study.py'
         helper.parent.mkdir(parents=True)
         helper.write_text('# frozen helper fixture')
@@ -188,7 +248,8 @@ class EvidenceTests(unittest.TestCase):
         for name in ('scaled_offline.pth', 'baseline_offline.pth', 'baseline_online.pth', 'cotracker2v1.pth'):
             study.torch.save({'weight': study.torch.ones(2)}, weights / name)
             weights_inventory.append({'Name': name, 'SHA256': protocol.sha(weights / name)})
-        write(prior / 'frozen-study.json', {'Source': [{'File': trainer.relative_to(checkout).as_posix(), 'SHA256': protocol.sha(trainer)}],
+        write(prior / 'frozen-study.json', {'Source': [{'File': p.relative_to(checkout).as_posix(), 'SHA256': protocol.sha(p)}
+                                                     for p in (trainer, repository_test)],
               'Weights': weights_inventory, 'Dataset': inventory})
         images = {k: 'sha256:' + d * 64 for k, d in (('Training', 'a'), ('Inference', 'b'), ('Evaluation', 'c'))}
         write(prior / 'local-runtime-images.json', images)
@@ -197,14 +258,31 @@ class EvidenceTests(unittest.TestCase):
         # The existing Linux-only checkpoint exporter fsyncs a read handle,
         # which Windows rejects. File contents/hash checks remain real here.
         with patch.object(study, 'CHECKOUT', checkout), patch('freeze_sidecar_reference.os.fsync'):
-            study.prepare(out, prior, PACKAGE, weights, data)
-            study.prepare(out, prior, PACKAGE, weights, data)
+            study.prepare(out, prior, package, weights, data)
+            study.prepare(out, prior, package, weights, data)
             self.assertEqual(len(list(out.glob('*/train/seed_*/*/run-config.json'))), 16)
             self.assertEqual(protocol.read(out / 'manifest.json')['policies'], list(protocol.POLICIES))
             self.assertEqual(before, {str(p): protocol.sha(p) for p in prior.iterdir()})
+            repository_test.write_text('# changed test, still reject even though not in runtime image')
+            with self.assertRaisesRegex(ValueError, 'artifact changed'):
+                study.prepare(out, prior, package, weights, data)
+            repository_test.write_text('# repository test remains audited')
+            # Pulling a repaired package must not rewrite an earlier manifest.
+            # A separate output namespace succeeds with the same inputs/images.
+            old_results = {str(p): protocol.sha(p) for p in out.rglob('*') if p.is_file()}
+            package_script.write_text('# package revision two: runtime scope fix')
+            with self.assertRaisesRegex(ValueError, 'Frozen'):
+                study.prepare(out, prior, package, weights, data)
+            self.assertEqual(old_results, {str(p): protocol.sha(p) for p in out.rglob('*') if p.is_file()})
+            repaired = self.root / 'out-runtimefix'
+            study.prepare(repaired, prior, package, weights, data)
+            self.assertEqual(len(list(repaired.glob('*/train/seed_*/*/run-config.json'))), 16)
+            self.assertEqual(protocol.read(out / 'manifest.json')['images'], protocol.read(repaired / 'manifest.json')['images'])
+            self.assertEqual(old_results, {str(p): protocol.sha(p) for p in out.rglob('*') if p.is_file()})
+            self.assertEqual(before, {str(p): protocol.sha(p) for p in prior.iterdir()})
             trainer.write_text('# incompatible source')
             with self.assertRaisesRegex(ValueError, 'artifact changed'):
-                study.prepare(out, prior, PACKAGE, weights, data)
+                study.prepare(repaired, prior, package, weights, data)
 
     def test_real_model_checkpoint_audit_rejects_frozen_backbone_change(self):
         study.torch.set_num_threads(1)
