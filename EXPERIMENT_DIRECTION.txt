@@ -6,6 +6,11 @@
 所有正式表现单独报告 38 例测试集；10 例验证集用于验证/选择，两者不可混填。
 
 当前落实：diagnostics/teacher-pool-search-v1/README.txt
+2026-10-17后续：diagnostics/teacher-input-search-v2/README.txt
+上轮on3_s0作为新control，保留在线CoTracker3零辅助点，四个教师系列分别测试
+左右翻转、上下翻转、片段百分位归一化、Gamma四项输入变化，共16候选+2对照。
+教师输入改变后标签映射回原坐标，学生始终读取原视频；不改变学生主线和损失。
+新结果tis-v2与旧tps-v1分开，仍先验证选择，再自动38例报告；新实验尚未得到远程结果。
 固定原 Mamba 支线和1000点推理，各教师独立寻找相对其默认设置更优的改进。
 分别搜索 CoTracker2.1、在线 CoTracker3、离线旧权重、离线 scaled 权重；
 离线两系列竞争同一个教师槽位，仍维持三个槽位，不改变教师抽样概率。
