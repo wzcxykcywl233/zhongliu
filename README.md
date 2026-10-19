@@ -317,6 +317,12 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 
 详细范围、对照、筛选规则和输出位置见 [参数复调协议](cotracker-algorithm/experiments/PARAMETER_RETUNE.zh-CN.md)。
 
+## 冻结主线：教师内部组合与跨教师联合搜索
+
+新入口为 `diagnostics/teacher-combination-search-v4/run_experiment.ps1`，详见[实验设计与运行说明](diagnostics/teacher-combination-search-v4/README.txt)。保持当前 `on3_s0 + scaled` 教师池为对照，冻结学生主干，只训练现有 Mamba 支线。每位教师分别做支持点、迭代次数、强度归一化、双视图融合的 16 种组合，去重后 46 组；随后三槽各保留两个候选，完整运行 27 种联合方案，新增 20 组。单独未胜出的候选仍可参与组合。
+
+`-Stage all` 自动执行 GPU 烟测、66组短程搜索、8–12组×3种子全量确认，并在验证集冻结名单后运行38例报告。强制保留最好的三槽改动及其全部8种子集，输出交互对比和逐种子/逐病例结果。默认独立目录 `C:\zhongliu\tcs-v4`，复用本地固定镜像，不构建或下载；重复同一命令验证后续跑。这里的官方指标始终属于学生，不是教师独立表现。
+
 ## 支线训练耗时与退化独立诊断
 
 [运行说明](cotracker-algorithm/experiments/SIDECAR_RUNTIME_DIAGNOSTICS.zh-CN.md)：`scripts/run_sidecar_runtime_diagnostics.ps1` 默认 `-Stage training`，只做 MLP/长 Mamba 各 3 步真实分阶段计时，保留原千步学习率计划。`-Stage profile` 为 11 组独立进程、每组 180 秒预算的合成微基准；`-Stage validation` 不再受加速门槛阻塞，固定原后端复用旧权重诊断 gain/修正上限。未启动新的千步训练；候选合格后显式 `-Stage test` 报告 38 例结果，旧目录保持不变。
