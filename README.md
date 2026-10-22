@@ -327,6 +327,15 @@ See [主线与候选诊断设计及运行说明](cotracker-algorithm/experiments
 
 新增[实验设计与运行说明](diagnostics/teacher-collaboration-v1/README.txt)：`diagnostics/teacher-collaboration-v1/run_experiment.ps1 -Stage all`。固定当前教师池与冻结主干Mamba学生，比较独立监督、坐标损失辅导、两档分歧审核、覆盖匹配随机审核、保守坐标融合六组；另有两个烟测空操作对照。烟测通过后自动运行六组短程诊断、六组×三种子千步确认、验证集冻结选择及38例完整报告。只改变可见坐标监督，每步学生前向一次，V/C及推理不变。默认新目录 `C:\zhongliu\tc-v1`，不修改历史结果，指标属于学生。
 
+## 教师联动标签质量验证（不训练）
+
+教师联动无稳定收益后的[标签质量验证](diagnostics/teacher-review-diagnostics-v1/README.txt)：
+`diagnostics/teacher-review-diagnostics-v1/run_diagnosis.ps1 -Stage all` 先做4项烟测，
+随后完成40例MRI纹理上的120项已知形变探针及10例真实验证视频的边界一致性诊断。
+固定三教师，不训练学生、不读取38例测试影像、不改权重、不构建镜像。默认独立目录
+`C:\zhongliu\trd-v1`，缓存三教师坐标，逐项断点续跑。合成点位误差与真实边界距离分表，
+不把教师一致或靠近边界等同于真实点对应准确，也不据此自动更换主线。
+
 ## 支线训练耗时与退化独立诊断
 
 [运行说明](cotracker-algorithm/experiments/SIDECAR_RUNTIME_DIAGNOSTICS.zh-CN.md)：`scripts/run_sidecar_runtime_diagnostics.ps1` 默认 `-Stage training`，只做 MLP/长 Mamba 各 3 步真实分阶段计时，保留原千步学习率计划。`-Stage profile` 为 11 组独立进程、每组 180 秒预算的合成微基准；`-Stage validation` 不再受加速门槛阻塞，固定原后端复用旧权重诊断 gain/修正上限。未启动新的千步训练；候选合格后显式 `-Stage test` 报告 38 例结果，旧目录保持不变。
