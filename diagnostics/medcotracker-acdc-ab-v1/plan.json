@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "project": "MedCoTracker ACDC A/B pilot",
+  "implementation_status": "acquisition, cine audit, patient split, loader and gradient checks; training queue pending audited data",
+  "external_data": {
+    "source": "ACDC official training-100 real cardiac cine MRI",
+    "patient_split": {"train": 80, "dev": 20},
+    "split_seed": 20261023,
+    "stratification": "16 train + 4 dev per disease group",
+    "official_test_50": "not downloaded or mounted",
+    "clip_frames": 16,
+    "clip_stride": 1,
+    "queries": 128,
+    "resize_hw": [384, 512],
+    "temporal_padding": false,
+    "mask_supervision": false,
+    "dense_point_ground_truth_available": false
+  },
+  "fixed_teachers": [
+    {"family": "v2", "checkpoint": "cotracker2v1.pth", "support_grid_side": 5, "iterations": 4},
+    {"family": "on3", "checkpoint": "baseline_online.pth", "support_grid_side": 0, "iterations": 4},
+    {"family": "offscaled", "checkpoint": "scaled_offline.pth", "support_points": 100, "iterations": 4}
+  ],
+  "routes": [
+    {"name": "R1", "external_trainable": [], "trackrad_initialization": "official backbone + fresh Mamba", "trackrad_trainable": "Mamba only", "external_steps": 0},
+    {"name": "A1", "external_trainable": ["updateformer.feature_sidecar"], "trackrad_initialization": "official frozen backbone + ACDC-pretrained Mamba", "trackrad_trainable": "Mamba only", "external_lr": 0.00005},
+    {"name": "B1", "external_trainable": ["fnet"], "trackrad_initialization": "ACDC-adapted encoder/backbone + fresh Mamba", "trackrad_trainable": "Mamba only", "external_lr": 0.000001},
+    {"name": "B2", "external_trainable": ["updateformer including flow/visibility/confidence heads; no sidecar"], "trackrad_initialization": "ACDC-adapted updateformer/backbone + fresh Mamba", "trackrad_trainable": "Mamba only", "external_lr": 0.000001},
+    {"name": "B3", "external_trainable": ["all backbone parameters; no sidecar"], "trackrad_initialization": "ACDC-adapted whole backbone + fresh Mamba", "trackrad_trainable": "Mamba only", "external_lr": 0.0000005}
+  ],
+  "planned_stages": {
+    "gpu_smoke": {"seeds": [0], "external_steps": 5, "trackrad_steps": 5, "mandatory": "real cine, all teacher interfaces, frozen tensors, gradient, strict checkpoint load and inference"},
+    "pilot": {"seeds": [0], "external_steps": 500, "trackrad_steps": 250, "trackrad_split_for_selection": "validation-10"},
+    "confirmation": {"seeds": [0, 1, 2], "external_steps": 3000, "trackrad_steps": 1000, "requires_explicit_approval": true},
+    "final_report": {"split": "test-38", "selection_allowed": false, "requires_frozen_validation_selection": true}
+  },
+  "trackrad": {"train_cases": 40, "validation_cases": 10, "test_cases": 38, "clip_frames": 60, "queries": 128, "train_iterations": 4, "sidecar_lr": 0.00005, "profile": "hierarchical_full_grid0_iterations2_memory_topk_diverse", "contour_points": 1000, "inference_iterations": 2},
+  "comparison": "A1/B1/B2/B3 vs contemporaneous R1 after the SAME TrackRAD stage; external pretraining has extra data and updates, not equal-compute attribution",
+  "selection": {"split": "TrackRAD validation-10 only", "reference": "R1", "minimum_DSC_delta_exclusive": 0, "maximum_D98_drop": 0.002, "maximum_HD95_increase": 0.02, "confirmation_minimum_improved_DSC_seeds": 2, "confirmation_maximum_single_seed_DSC_drop": 0.002, "rank": ["DSC descending", "HD95 ascending", "CD ascending", "D98 descending", "name"], "fallback": "retain R1; do not select by test-38 or teacher-matching loss alone"},
+  "limits": "ACDC cardiac gated cine is a real medical temporal domain but is not tumor MRI-linac. ED/ES segmentation overlap does not validate point correspondence. Synthetic code tests are not pretraining evidence. Test-38 is repeatedly inspected, not a blind test."
+}
