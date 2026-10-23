@@ -16,13 +16,15 @@ import measures as M
 PACKAGE = Path(__file__).resolve().parent
 CHECKOUT = Path(os.environ.get('SIDECAR_CHECKOUT', '/checkout'))
 APP = Path(os.environ.get('COTRACKER_APP_DIR', '/opt/app'))
-RULE = {'version': 1, 'height': 384, 'width': 512, 'frames': 60, 'queries': 128,
+RULE = {'version': 2, 'height': 384, 'width': 512, 'frames': 60, 'queries': 128,
         'synthetic_motions': ['static', 'translation', 'rotation_zoom'],
         'query_times': 'all zero; diagnostic probes, not a replay of training steps',
         'synthetic_queries': '64 first-mask contour + 64 interior grid',
         'real_queries': '128 first-mask contour', 'real_clip': 'first min(60,T) consecutive frames, no looping',
         'contour_sampler': 'largest foreground boundary pixel centers; cap count at unique pixels; not spline/arclength',
         'normalization': 'exact frozen training dataset reader: whole-volume robust 1/99 then resize',
+        'resampling_range': {'minimum': 0., 'maximum': 255., 'roundoff_tolerance': 1e-4,
+                             'policy': 'strict source; clamp only bounded float32 resampling roundoff; reject nonfinite'},
         'geometry': 'exact frozen training dataset moveaxis(-1,0), including masks',
         'reference': 'synthetic: known image warp EPE; real: unsigned boundary distance, not point GT',
         'thresholds': [2, 4], 'no_test': True, 'no_training': True, 'no_selection': True}
@@ -194,13 +196,38 @@ def contour(mask, n):
     return xy[np.linspace(0, len(xy), n, endpoint=False).astype(int)].astype(np.float32)
 
 
-def make_input(data, job):
+def checked_pixels(pixels, stage, audit, *, resampled=False):
+    """Repair only interpolation roundoff; never hide invalid source data or NaN."""
+    import torch
+    if pixels.dtype != torch.float32 or not pixels.numel():
+        raise ValueError(f'{stage}: expected nonempty float32 pixels')
+    if not bool(torch.isfinite(pixels).all()):
+        raise ValueError(f'{stage}: nonfinite pixels before teacher inference')
+    low, high = float(pixels.min()), float(pixels.max())
+    rule = RULE['resampling_range']
+    tolerance = rule['roundoff_tolerance'] if resampled else 0.
+    correction = max(rule['minimum'] - low, high - rule['maximum'], 0.)
+    if correction > tolerance:
+        raise ValueError(f'{stage}: pixels outside [0,255]: min={low:.9g}, max={high:.9g}, '
+                         f'allowed_roundoff={tolerance:.9g}; refusing to clip invalid input')
+    below = int((pixels < rule['minimum']).sum())
+    above = int((pixels > rule['maximum']).sum())
+    audit[stage] = {'minimum_before': low, 'maximum_before': high,
+                    'pixels': pixels.numel(), 'below_zero': below, 'above_255': above,
+                    'clipped_pixels': below + above, 'max_correction': correction,
+                    'allowed_roundoff': tolerance}
+    return pixels.clamp(rule['minimum'], rule['maximum']) if below or above else pixels
+
+
+def make_input(data, job, pixel_audit=None):
     import torch
     import torch.nn.functional as F
     from cotracker.datasets.trackrad_video_dataset import TrackRADVideoDataset as DS
     c, h, w = job['Case'], RULE['height'], RULE['width']
     case = data/c
-    video = DS._read_mha(case/'images'/f'{c}_frames.mha')
+    pixel_audit = {} if pixel_audit is None else pixel_audit
+    video = checked_pixels(DS._read_mha(case/'images'/f'{c}_frames.mha'),
+                           'normalized_source', pixel_audit)
     first = DS._read_mask_mha(case/'targets'/f'{c}_first_label.mha')
     if first.shape != (1, *video.shape[1:]) or len(video) < 2:
         raise ValueError('Query mask/image geometry mismatch')
@@ -208,6 +235,7 @@ def make_input(data, job):
     native_frames = len(video)
     if job['Mode'] == 'synthetic':
         source = F.interpolate(video[:1, None], (h, w), mode='bilinear', align_corners=False)[0, 0]
+        source = checked_pixels(source, 'synthetic_resize', pixel_audit, resampled=True)
         xy = contour(mask, 64)
         xx, yy = np.meshgrid(np.linspace(16, w-17, 8), np.linspace(16, h-17, 8))
         xy = np.concatenate([xy, np.stack([xx.ravel(), yy.ravel()], -1).astype(np.float32)])
@@ -220,9 +248,11 @@ def make_input(data, job):
         grids[..., 1] = 2*grids[..., 1]/(h-1)-1
         frames = F.grid_sample(source[None, None].expand(len(transforms), -1, -1, -1), grids,
                                mode='bilinear', padding_mode='zeros', align_corners=True)
+        frames = checked_pixels(frames, 'synthetic_warp', pixel_audit, resampled=True)
         truth = M.transform_points(xy, transforms)[None]
     else:
         frames = F.interpolate(video[:RULE['frames'], None], (h, w), mode='bilinear', align_corners=False)
+        frames = checked_pixels(frames, 'real_resize', pixel_audit, resampled=True)
         xy, truth, transforms = contour(mask, 128), None, None
     queries = torch.from_numpy(np.concatenate([np.zeros((len(xy), 1), dtype=np.float32), xy], -1))[None]
     frames = frames[None].expand(-1, -1, 3, -1, -1).contiguous().float()
@@ -332,7 +362,8 @@ def probe(root, datasets, weights, p, scope):
         for index, job in enumerate(pending):
             started = time.perf_counter()
             data = datasets/('train' if job['Mode'] == 'synthetic' else 'validation')
-            video, q, truth, transforms, native_frames = make_input(data, job)
+            pixel_audit = {}
+            video, q, truth, transforms, native_frames = make_input(data, job, pixel_audit)
             torch.cuda.reset_peak_memory_stats()
             gpu_video, gpu_q = video.cuda(), q.cuda()
             outputs, evidence = [], []
@@ -370,6 +401,7 @@ def probe(root, datasets, weights, p, scope):
             save(folder/'proof.json', {'job': job, 'rules_match_original': True, 'teacher_evidence': evidence,
                  'frames': video.shape[1], 'native_frames': native_frames, 'real_truth_file': mask_name,
                  'queries': q.shape[1],
+                 'pixel_range_audit': pixel_audit,
                  'peak_reserved_gib': peak, 'seconds': time.perf_counter()-started, 'teacher_parameters_exact': True,
                  'teacher_tensor_sha256': initial})
             save(folder/'verified.json', {'job': job, 'manifest_sha256': sha(root/'manifest.json'),

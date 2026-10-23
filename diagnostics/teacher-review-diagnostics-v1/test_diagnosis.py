@@ -109,6 +109,72 @@ class MeasuresTests(unittest.TestCase):
         self.assertEqual(errors[0, 0, 1], 0)
         self.assertTrue(np.isnan(errors[0, 0, 2]))
 
+    def test_roundoff_clamp_is_bounded_audited_and_not_in_place(self):
+        import torch
+        endpoints = torch.tensor([0., 255.], dtype=torch.float32)
+        outside = torch.nextafter(endpoints, torch.tensor([-float('inf'), float('inf')]))
+        pixels = torch.cat([outside, torch.tensor([0., 12.5, 254., 255.])])
+        original, audit = pixels.clone(), {}
+        result = D.checked_pixels(pixels, 'warp', audit, resampled=True)
+        self.assertTrue(torch.equal(pixels, original))
+        self.assertTrue(torch.equal(result[:2], endpoints))
+        self.assertTrue(torch.equal(result[2:], pixels[2:]))
+        self.assertEqual(audit['warp']['clipped_pixels'], 2)
+        self.assertLessEqual(audit['warp']['max_correction'], 1e-4)
+        self.assertEqual(audit['warp']['pixels'], 6)
+        self.assertEqual(audit['warp']['below_zero'], 1)
+        self.assertEqual(audit['warp']['above_255'], 1)
+        valid = torch.tensor([0., 127.25, 255.])
+        self.assertIs(D.checked_pixels(valid, 'valid', audit, resampled=True), valid)
+        self.assertEqual(audit['valid']['max_correction'], 0)
+
+    def test_bad_pixels_still_fail_instead_of_silent_clipping(self):
+        import torch
+        for value in (-.01, 255.01, float('nan'), float('inf'), -float('inf')):
+            for resampled in (False, True):
+                with self.subTest(value=value, resampled=resampled), self.assertRaises(ValueError):
+                    D.checked_pixels(torch.tensor([value]), 'bad', {}, resampled=resampled)
+        # Even tiny source violations are not interpolation roundoff and must fail.
+        with self.assertRaisesRegex(ValueError, 'refusing to clip'):
+            D.checked_pixels(torch.tensor([255.00003]), 'normalized_source', {})
+        for pixels in (torch.tensor([255.], dtype=torch.float64), torch.empty(0)):
+            with self.assertRaisesRegex(ValueError, 'float32'):
+                D.checked_pixels(pixels, 'bad', {}, resampled=True)
+
+    def test_saturated_warps_pass_unchanged_teacher_preflight(self):
+        import torch
+        p, _ = D.load_protocol()
+        from cotracker.datasets.trackrad_video_dataset import TrackRADVideoDataset as DS
+        source = torch.full((2, 64, 80), 255., dtype=torch.float32)
+        mask = torch.zeros(1, 64, 80, dtype=torch.bool)
+        mask[:, 10:54, 14:66] = True
+        jobs = [dict(Case='A', Mode='synthetic', Motion=m) for m in D.RULE['synthetic_motions']]
+        jobs.append(dict(Case='A', Mode='real'))
+        total_corrected = 0
+        with patch.dict(D.RULE, height=64, width=80, frames=5), patch.object(DS, '_read_mha', return_value=source), patch.object(DS, '_read_mask_mha', return_value=mask):
+            for job in jobs:
+                with self.subTest(job=job):
+                    audit = {}
+                    video, q, truth, transforms, _ = D.make_input(Path('.'), job, audit)
+                    self.assertEqual(video.dtype, torch.float32)
+                    self.assertTrue(bool(torch.isfinite(video).all()))
+                    self.assertGreaterEqual(float(video.min()), 0.)
+                    self.assertLessEqual(float(video.max()), 255.)
+                    checked, _, _, _ = p.B.transform_inputs(video, q, q[:, :0], 'none')
+                    self.assertIs(checked, video)
+                    self.assertEqual(audit['normalized_source']['clipped_pixels'], 0)
+                    total_corrected += sum(row['clipped_pixels'] for row in audit.values())
+                    if job['Mode'] == 'synthetic':
+                        np.testing.assert_array_equal(transforms, M.matrices(job['Motion'], 5, 64, 80))
+                        np.testing.assert_array_equal(truth, M.transform_points(q.numpy()[0, :, 1:], transforms)[None])
+            # Reject corrupt source before constructing a warp, even if corruption is outside frame 0.
+            broken = source.clone()
+            broken[1, 0, 0] = float('nan')
+            with patch.object(DS, '_read_mha', return_value=broken), self.assertRaisesRegex(ValueError, 'nonfinite'):
+                D.make_input(Path('.'), jobs[0])
+        self.assertGreater(total_corrected, 0)
+        self.assertTrue(bool((source == 255).all()))
+
     def test_empty_masks_not_perfect(self):
         e = M.boundary_errors({'p': np.zeros((1, 2, 2, 2))}, np.zeros((2, 20, 20), bool))
         self.assertTrue(np.isnan(e['p']).all())

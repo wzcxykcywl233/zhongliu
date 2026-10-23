@@ -4,7 +4,7 @@ param(
     [string]$RepoRoot='C:\zhongliu\zhongliu-tuning',
     [string]$PriorStudy='C:\zhongliu\ts-v1',
     [string]$CollaborationRoot='C:\zhongliu\tc-v1',
-    [string]$OutputRoot='C:\zhongliu\trd-v1'
+    [string]$OutputRoot='C:\zhongliu\trd-rangefix-v2'
 )
 $ErrorActionPreference='Stop'
 $RepoRoot=(Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\')
@@ -14,7 +14,7 @@ $OutputRoot=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
 $PackageRoot=$PSScriptRoot
 $Weights=Join-Path $RepoRoot 'training-checkpoints'
 if ($OutputRoot.Length -gt 48 -or [IO.Path]::GetPathRoot($OutputRoot) -eq $OutputRoot+'\') {
-    throw 'Use a short dedicated OutputRoot such as C:\zhongliu\trd-v1.'
+    throw 'Use a short dedicated OutputRoot such as C:\zhongliu\trd-rangefix-v2.'
 }
 $Protocol=Get-Content -LiteralPath (Join-Path $PriorStudy 'frozen-study.json') -Raw | ConvertFrom-Json
 $Study=Get-Content -LiteralPath (Join-Path $CollaborationRoot 'manifest.json') -Raw | ConvertFrom-Json
