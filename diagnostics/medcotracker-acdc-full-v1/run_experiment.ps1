@@ -7,7 +7,7 @@ param(
     [string]$AuditRoot='C:\zhongliu\acdc-ab-native-v2',
     [string]$ExternalSmoke='C:\zhongliu\acdc-ab-gpu-smoke-v1',
     [string]$PilotRoot='C:\zhongliu\mct-ab-v1',
-    [string]$OutputRoot='C:\zhongliu\mct-b1-full-v1'
+    [string]$OutputRoot='C:\zhongliu\mct-full-v1'
 )
 $ErrorActionPreference='Stop'
 $RepoRoot=(Resolve-Path -LiteralPath $RepoRoot).Path.TrimEnd('\')
@@ -19,7 +19,7 @@ $PilotRoot=(Resolve-Path -LiteralPath $PilotRoot).Path.TrimEnd('\')
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
 $Weights=Join-Path $RepoRoot 'training-checkpoints'
 if ($OutputRoot.Length -gt 25 -or $OutputRoot.Length -le 3) {
-    throw 'Use a short dedicated OutputRoot, at most 25 characters (seed subfolders also need short paths).'
+    throw "OutputRoot has $($OutputRoot.Length) characters: $OutputRoot. Use a dedicated path of at most 25 characters, e.g. C:\zhongliu\mct-full-v1."
 }
 $Protocol=Get-Content -LiteralPath (Join-Path $PriorStudy 'frozen-study.json') -Raw | ConvertFrom-Json
 foreach ($File in $Protocol.Source) {

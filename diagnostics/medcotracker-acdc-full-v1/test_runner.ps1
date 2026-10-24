@@ -1,5 +1,25 @@
 param([string]$TempRoot='D:\yijian\tmp')
 $ErrorActionPreference='Stop'
+$RunnerPath=Join-Path $PSScriptRoot 'run_experiment.ps1'
+$ParseTokens=$null; $ParseErrors=$null
+$RunnerAst=[System.Management.Automation.Language.Parser]::ParseFile($RunnerPath,[ref]$ParseTokens,[ref]$ParseErrors)
+if ($ParseErrors.Count) { throw 'Runner has syntax errors.' }
+$DefaultOutput=@($RunnerAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'OutputRoot' })[0].DefaultValue.SafeGetValue()
+$OutputGuard=$RunnerAst.Find({param($Node)
+    $Node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $Node.Extent.Text.StartsWith('if ($OutputRoot.Length')
+},$true)
+if (-not $OutputGuard) { throw 'Output path guard missing.' }
+function Test-OutputPathGuard([string]$OutputRoot) {
+    $OutputRoot=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
+    & ([scriptblock]::Create($OutputGuard.Extent.Text))
+}
+# Exercise the real default/guard without creating or accessing C:\zhongliu.
+Test-OutputPathGuard $DefaultOutput
+if ((Join-Path $DefaultOutput 'seed_0').Length -gt 32) { throw 'Default seed path exceeds the designed budget.' }
+$Rejected=$false
+try { Test-OutputPathGuard 'C:\zhongliu\mct-b1-full-v1' } catch { $Rejected=$true }
+if (-not $Rejected) { throw 'Regression fixture: previous 26-character default must be rejected.' }
 $TestRoot=Join-Path $TempRoot ('f'+[Guid]::NewGuid().ToString('N').Substring(0,4))
 $RealRepo=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 foreach ($Part in @('repo\scripts','repo\training-checkpoints','prior','data','audit','external-smoke','pilot','train\T_001','val\V_001')) {

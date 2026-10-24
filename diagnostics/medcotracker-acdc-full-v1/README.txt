@@ -50,7 +50,7 @@ selection.json在validation-10完成时冻结。无论B1是否合格，显式tes
 ACDC增加了医学数据和优化步数，非等总计算量消融；心脏cine不等同肿瘤MRI-linac。
 
 新目录与安全
-默认 C:\zhongliu\mct-b1-full-v1，不改C:\zhongliu\mct-ab-v1及任何已有结果。
+默认 C:\zhongliu\mct-full-v1（23字符），不改C:\zhongliu\mct-ab-v1及任何已有结果。
 新包从已验证pilot实现固化而来，不修改旧包，以保留旧manifest的源代码哈希。
 只复用本地固定镜像，不构建/拉取、不联网、不下载数据。
 外部训练只挂载ACDC数据为训练输入；下游训练只挂载TrackRAD train-40为训练输入。
@@ -66,9 +66,9 @@ all/full不解析或挂载test目录，仅读取历史清单中的test病例ID�
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\medcotracker-acdc-full-v1\run_experiment.ps1" -Stage all
 
 正常完成后先查看：
-C:\zhongliu\mct-b1-full-v1\reports\validation-10\summary.csv
-C:\zhongliu\mct-b1-full-v1\reports\validation-10\paired-deltas.csv
-C:\zhongliu\mct-b1-full-v1\reports\validation-10\selection.json
+C:\zhongliu\mct-full-v1\reports\validation-10\summary.csv
+C:\zhongliu\mct-full-v1\reports\validation-10\paired-deltas.csv
+C:\zhongliu\mct-full-v1\reports\validation-10\selection.json
 
 需要最终38例报告时，单独执行同一脚本 -Stage test；不重新训练。
 结果在reports\test-38；病例级差值为paired-cases.csv，原始每种子指标为results.csv。
