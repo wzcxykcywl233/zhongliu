@@ -1,6 +1,20 @@
 MedCoTracker / ACDC / A-B 第一轮准备包
 ===================================
 
+2026-10-24 原生短序列修复（审计版本2）
+-----------------------------------
+官方 patient011 的 Info.cfg 为 NbFrame:15，实际4D影像为 T,Z,Y,X=15,9,256,216。
+旧版将16帧当成最低输入长度，错误地拒绝了有效cine；不是本次 sform 警告导致退出。
+现在使用 min(16,T) 个原生连续帧。T<16时取整段，T>=16保持旧采样和像素不变。
+少于2帧、非有限数据、常量强度、异常空间形状、ED/ES不一致仍停止。
+患者不被丢弃，仍按相同种子和疾病分层80/20；采样batch=1，不做时间补齐。
+新清单记录 audit_version=2、native_frame_counts、short_native_cines和逐患者clip_frames。
+下载索引版本不变，DataRoot仍为C:\zhongliu\acdc-official-v1，已下载文件不重下。
+默认新审计目录C:\zhongliu\acdc-ab-native-v2，旧C:\zhongliu\acdc-ab-v1保留。
+更新代码后用 -Stage offline 离线执行prepare和check-model，无需再次确认下载许可。
+check-model改用15帧随机权重CPU反向检查；这不替代后续真实教师/预训练权重GPU烟测。
+后续GPU烟测须覆盖完整审计所得的最短native长度。教师不支持时停止，不静默补帧。
+
 当前边界
 --------
 本包已实现：官方下载、逐文件重试与核验、患者级划分、4D 时间轴/ED-ES
@@ -38,7 +52,8 @@ doi:10.1109/TMI.2018.2837502。
    同一患者所有空间切片、所有时间帧、ED/ES 都留在同一集合。
 3. NIfTI 标量图像维度必须为 X,Y,Z,T，SimpleITK 数组必须为 T,Z,Y,X。
    同时用 ED/ES 原图与 4D 对应时间帧比对，验证时间索引不是猜出来的。
-4. 16 个原生连续帧，stride=1，不循环、不倒序补帧，不凑成 60 帧。
+4. 目标16个原生连续帧，实际长度 min(16,T)，stride=1，不循环、不倒序补帧，不凑成60帧。
+   短序列取其完整原生帧，batch=1；后续loss按样本内有效点帧归一化。
    每个 epoch 每位患者一个随机切片/随机时间窗，避免切片多的患者占优。
 5. 固定切片整个 cine 的 1/99 百分位归一化，输出 float32 [0,255]，
    灰度复制为三个通道，双线性缩放到 384x512；不使用标注选切片或做心脏裁剪。
@@ -87,19 +102,23 @@ test-38 反复看过，不能称为全新盲测。
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\medcotracker-acdc-ab-v1\run_prepare.ps1" -Stage all -AcceptResearchTerms
 
 默认数据目录：C:\zhongliu\acdc-official-v1
-默认审计目录：C:\zhongliu\acdc-ab-v1
+默认审计目录：C:\zhongliu\acdc-ab-native-v2
 all = download（唯一允许联网的步骤）→prepare（断网CPU）→check-model（断网CPU）。
 无需 GPU，不会与另一训练竞争 GPU，也不会在完成后自行启动训练。
 若镜像哈希已不存在，可显式提供已核实的本地训练镜像 -RuntimeImage sha256:...。
 下载失败重复原命令；只做离线检查可 -Stage prepare 或 -Stage check-model。
+已下载完成、本次报patient011的情况，更新代码后只需：
+
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "C:\zhongliu\zhongliu-tuning\diagnostics\medcotracker-acdc-ab-v1\run_prepare.ps1" -Stage offline
 
 完成后查看
 ----------
-Get-Content -LiteralPath "C:\zhongliu\acdc-ab-v1\data-manifest.json" -Raw
-Get-Content -LiteralPath "C:\zhongliu\acdc-ab-v1\ab-parameter-check.json" -Raw
+Get-Content -LiteralPath "C:\zhongliu\acdc-ab-native-v2\data-manifest.json" -Raw
+Get-Content -LiteralPath "C:\zhongliu\acdc-ab-native-v2\ab-parameter-check.json" -Raw
 
 无需粘贴完整大 JSON。把最后日志，以及 data-manifest 的 training_ready、
-split_counts 和4条参数检查结果发回即可。没有正式GPU烟测通过前，不运行大训练。
+split_counts、native_frame_counts、short_native_cines和4条参数检查结果发回即可。
+没有正式GPU烟测通过前，不运行大训练。
 
 测试
 ----

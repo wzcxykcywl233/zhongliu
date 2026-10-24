@@ -20,6 +20,26 @@ DOCUMENTS = {'LICENSE_TERMS.md': '66e290e0961576b1bad4ee3c',
 GROUPS = ('DCM', 'HCM', 'MINF', 'NOR', 'RV')
 SEED = 20261023
 SCHEMA = 'medcotracker-acdc-preparation-v1'
+# Acquisition schema stays unchanged: verified downloads remain reusable.
+AUDIT_VERSION = 2
+CLIP_FRAMES = 16
+MIN_NATIVE_FRAMES = 2
+
+
+def clip_length(native_frames, requested_frames=CLIP_FRAMES):
+    if isinstance(requested_frames, bool) or not isinstance(requested_frames, int) or requested_frames < 2:
+        raise ValueError('Requested clip length must be an integer >=2')
+    if native_frames < MIN_NATIVE_FRAMES:
+        raise ValueError(f'At least {MIN_NATIVE_FRAMES} native time frames required; got {native_frames}; no padding allowed')
+    return min(native_frames, requested_frames)
+
+
+def clip_policy():
+    return {'target_frames': CLIP_FRAMES, 'minimum_native_frames': MIN_NATIVE_FRAMES,
+            'length_rule': 'min(target_frames, native_frames)', 'stride': 1,
+            'padding': 'forbidden', 'axes': 'T,Z,Y,X', 'batch_size': 1,
+            'sample_unit': 'patient then slice then contiguous time window',
+            'resize_hw': [384, 512], 'intensity': 'per-slice whole-cine p01/p99, clip 0..255 float32'}
 
 
 def digest(path, algorithm='sha256'):
@@ -232,8 +252,11 @@ def audit_patient(folder):
     if array.shape != tuple(reversed(image.GetSize())) or not np.isfinite(array).all():
         raise ValueError('Invalid T,Z,Y,X cine: ' + patient)
     frames, slices, height, width = array.shape
-    if frames < 16 or slices < 1 or min(height, width) < 16 or np.ptp(array) <= 0:
-        raise ValueError('Insufficient/nonvarying cine; no temporal padding allowed: ' + patient)
+    actual_clip_frames = clip_length(frames)
+    if slices < 1 or min(height, width) < 16:
+        raise ValueError(f'Invalid spatial shape {array.shape}: {patient}')
+    if np.ptp(array) <= 0:
+        raise ValueError('Constant-intensity cine: ' + patient)
     if 'NbFrame' in info and int(info['NbFrame']) != frames:
         raise ValueError('Info.cfg frame count and NIfTI T disagree: ' + patient)
     spacing = image.GetSpacing()
@@ -264,6 +287,7 @@ def audit_patient(folder):
             raise ValueError('Invalid/missing ED/ES labels: ' + stem)
         annotated[phase] = number - 1
     return {'patient': patient, 'group': info['Group'], 'shape_tzyx': list(array.shape),
+            'clip_frames': actual_clip_frames, 'short_native_cine': frames < CLIP_FRAMES,
             'spacing_xyzt': list(spacing), 'annotation_frames_zero_based': annotated,
             'cine': 'training/' + patient + '/' + path.name,
             'files_sha256': {p.name: digest(p) for p in sorted(folder.iterdir()) if p.is_file() and not p.name.endswith('.partial')},
@@ -285,16 +309,19 @@ def prepare(root, output, sample_only=False):
         if not re.fullmatch(r'patient(?:00[1-9]|0[1-9]\d|100)', folder.name):
             raise ValueError('Unexpected patient; official test-50 must not enter pretraining')
         patients.append(audit_patient(folder))
-        print('AUDIT ' + folder.name, flush=True)
+        row = patients[-1]
+        print(f"AUDIT {folder.name} native_frames={row['shape_tzyx'][0]} clip_frames={row['clip_frames']}", flush=True)
     splits = {} if sample_only else split_patients(patients)
     for row in patients:
         row['split'] = splits.get(row['patient'], 'audit-only-not-for-training')
-    manifest = {'schema': SCHEMA, 'complete': True, 'training_ready': not sample_only,
+    manifest = {'schema': SCHEMA, 'audit_version': AUDIT_VERSION, 'complete': True, 'training_ready': not sample_only,
                 'seed': SEED, 'download_index_sha256': digest(root / 'download-index.json'),
                 'patients': patients, 'split_counts': dict(Counter(r['split'] for r in patients)),
-                'clip': {'frames': 16, 'stride': 1, 'padding': 'forbidden', 'axes': 'T,Z,Y,X',
-                         'sample_unit': 'patient then slice then contiguous time window',
-                         'resize_hw': [384, 512], 'intensity': 'per-slice whole-cine p01/p99, clip 0..255 float32'},
+                'clip': clip_policy(),
+                'native_frame_counts': dict(sorted(Counter(str(r['shape_tzyx'][0]) for r in patients).items())),
+                'short_native_cines': [{'patient': r['patient'], 'native_frames': r['shape_tzyx'][0],
+                                       'clip_frames': r['clip_frames'], 'split': r['split']}
+                                      for r in patients if r['short_native_cine']],
                 'labels': 'ED/ES masks only; no dense point truth; no mask loss in A/B pilot',
                 'official_test_downloaded': False}
     dest = output / ('sample-audit.json' if sample_only else 'data-manifest.json')

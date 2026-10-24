@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('download','prepare','check-model','all')][string]$Stage='prepare',
+    [ValidateSet('download','prepare','check-model','offline','all')][string]$Stage='prepare',
     [string]$RepoRoot='C:\zhongliu\zhongliu-tuning',
     [string]$PriorStudy='C:\zhongliu\ts-v1',
     [string]$DataRoot='C:\zhongliu\acdc-official-v1',
-    [string]$OutputRoot='C:\zhongliu\acdc-ab-v1',
+    [string]$OutputRoot='C:\zhongliu\acdc-ab-native-v2',
     [string]$RuntimeImage='',
     [switch]$AcceptResearchTerms
 )
@@ -45,7 +45,8 @@ $DataLock=[IO.File]::Open($DataRoot+'.lock','OpenOrCreate','ReadWrite','None')
 try {
     $OutputLock=[IO.File]::Open($OutputRoot+'.lock','OpenOrCreate','ReadWrite','None')
     try {
-        $Stages=if ($Stage -eq 'all') {@('download','prepare','check-model')} else {@($Stage)}
+        $Stages=if ($Stage -eq 'all') {@('download','prepare','check-model')}
+                elseif ($Stage -eq 'offline') {@('prepare','check-model')} else {@($Stage)}
         foreach ($Part in $Stages) {
             Write-Host "ACDC $Part; no model training, no TrackRAD/test access, no image build/pull."
             $DockerArgs=@('run','--rm','--pull','never','--cpus','4','--env','PYTHONDONTWRITEBYTECODE=1',

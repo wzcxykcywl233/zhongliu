@@ -26,4 +26,13 @@ foreach ($Call in @($Runs[1],$Runs[2])) {
     if ($Call -notcontains '--network' -or $Call -notcontains 'none') { throw 'Offline preparation lost network isolation' }
 }
 if ($Runs[1] -notcontains 'prepare' -or $Runs[2] -notcontains '/package/ab_modes.py') { throw 'Wrong stage order' }
+$global:AcDcMockCalls.Clear()
+& (Join-Path $PSScriptRoot 'run_prepare.ps1') -Stage offline -RepoRoot $Repo `
+    -DataRoot (Join-Path $TestRoot 'data') -OutputRoot (Join-Path $TestRoot 'offline-audit') -RuntimeImage $global:AcDcMockImage
+$Runs=@($global:AcDcMockCalls | Where-Object { $_[0] -eq 'run' })
+if ($Runs.Count -ne 2) { throw 'Offline recovery must run exactly two workers' }
+foreach ($Call in $Runs) {
+    if ($Call -contains 'download' -or $Call -contains '--accept-research-terms' -or
+        $Call -notcontains '--network' -or $Call -notcontains 'none') { throw 'Offline recovery must not download or access network' }
+}
 Write-Host 'POWERSHELL LAUNCHER MOCK PASSED (no Docker invocation or network)'

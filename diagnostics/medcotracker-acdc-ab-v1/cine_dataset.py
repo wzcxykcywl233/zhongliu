@@ -5,12 +5,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from acdc_data import SCHEMA, digest, read
+from acdc_data import AUDIT_VERSION, SCHEMA, clip_length, clip_policy, digest, read
 
 
 def sample_cine(array, seed, frames=16, resize=(384, 512)):
-    if array.ndim != 4 or array.shape[0] < frames or not np.isfinite(array).all():
-        raise ValueError('Expected finite T,Z,Y,X with enough native frames')
+    if array.ndim != 4 or min(array.shape[1:]) < 1 or not np.isfinite(array).all():
+        raise ValueError('Expected finite, nonempty T,Z,Y,X')
+    requested_frames = frames
+    frames = clip_length(array.shape[0], requested_frames)
     generator = np.random.default_rng(seed)
     z = int(generator.integers(array.shape[1]))
     start = int(generator.integers(array.shape[0] - frames + 1))
@@ -32,6 +34,8 @@ def sample_cine(array, seed, frames=16, resize=(384, 512)):
         raise ValueError('Unexpected resize range')
     video = video.clamp(0, 255).expand(-1, 3, -1, -1).contiguous()
     return video, {'slice_z': z, 'frames': list(range(start, start+frames)),
+                   'requested_frames': requested_frames, 'actual_frames': frames,
+                   'short_native_cine': array.shape[0] < requested_frames,
                    'intensity_low': low, 'intensity_high': high, 'source_shape_tzyx': list(array.shape)}
 
 
@@ -41,6 +45,8 @@ class ACDCCineDataset(torch.utils.data.Dataset):
         self.manifest = read(manifest)
         if self.manifest['schema'] != SCHEMA or not self.manifest['training_ready']:
             raise ValueError('Only the complete 100-patient audited manifest is trainable')
+        if self.manifest.get('audit_version') != AUDIT_VERSION or self.manifest.get('clip') != clip_policy():
+            raise ValueError('Re-audit in a new OutputRoot with the native-length v2 policy; keep downloaded data')
         if split not in ('external-train-80', 'external-dev-20'):
             raise ValueError('No external test access in this loader')
         self.rows = sorted((r for r in self.manifest['patients'] if r['split'] == split), key=lambda r: r['patient'])
@@ -50,6 +56,8 @@ class ACDCCineDataset(torch.utils.data.Dataset):
         # Once per dataset construction, before yielding any sample.
         for row in self.rows:
             path = self.root / row['cine']
+            if row.get('clip_frames') != clip_length(row['shape_tzyx'][0]):
+                raise ValueError('Invalid audited clip length: ' + row['patient'])
             if digest(path) != row['files_sha256'][path.name]:
                 raise ValueError('Cine changed after audit: ' + row['patient'])
 
@@ -66,4 +74,6 @@ class ACDCCineDataset(torch.utils.data.Dataset):
         if list(array.shape) != row['shape_tzyx']:
             raise ValueError('Changed shape')
         video, proof = sample_cine(array, self.seed + self.epoch * 1000003 + index)
+        if video.shape[0] != row['clip_frames']:
+            raise ValueError('Sample length differs from audited plan')
         return {'video': video, 'patient': row['patient'], 'group': row['group'], 'sampling': proof}

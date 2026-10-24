@@ -40,7 +40,7 @@ def configure(model, route):
             'note': 'B2 includes coordinate/V/C heads within updateformer; corr_mlp stays frozen.'}
 
 
-def check_routes(output):
+def check_routes(output, frames=15):
     import torch
     from cotracker.models.core.cotracker.cotracker3_offline import CoTrackerThreeOffline
     torch.set_num_threads(1)
@@ -52,7 +52,7 @@ def check_routes(output):
         frozen = {n: p.detach().clone() for n, p in model.named_parameters() if not p.requires_grad}
         trainable_before = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
         optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-5)
-        video = torch.rand(1, 3, 3, 64, 64) * 255
+        video = torch.rand(1, frames, 3, 64, 64) * 255
         queries = torch.tensor([[[0., 20., 20.], [1., 40., 40.]]])
         p, v, c = model(video=video, queries=queries, iters=2, is_train=True)[:3]
         loss = p.square().mean() * .001 + v.square().mean() + c.square().mean()
@@ -69,7 +69,7 @@ def check_routes(output):
         if not any(not torch.equal(p, state[n]) for n, p in trainable_before.items()):
             raise ValueError('Optimizer did not update: ' + route)
         report.update(frozen_parameters_exact=True, gradient_path_verified=True,
-                      updated_parameters_verified=True, gradient_names=gradients)
+                      updated_parameters_verified=True, gradient_names=gradients, checked_frames=frames)
         reports.append(report)
         print('PARAMETER/GRADIENT CHECK PASSED ' + route, flush=True)
         del model, optimizer, frozen, trainable_before
@@ -81,6 +81,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--app', type=Path, default=Path(os.environ.get('COTRACKER_APP_DIR', '/checkout/cotracker-algorithm')))
     parser.add_argument('--output', type=Path, default=Path('/output'))
+    parser.add_argument('--frames', type=int, choices=(2, 15, 16), default=15)
     args = parser.parse_args()
     sys.path.insert(0, str(args.app / 'ext/co-tracker'))
-    check_routes(args.output)
+    check_routes(args.output, args.frames)
