@@ -80,3 +80,22 @@ No historical runtime files are edited (their source hashes remain valid).
 CPU tests: python -m unittest discover -s diagnostics/medcotracker-acdc-exclude82-v1 -p "test_*.py"
 PowerShell mock: diagnostics\medcotracker-acdc-exclude82-v1\test_runner.ps1
 Mocks are not a remote GPU smoke. The remote -Stage all performs the actual smoke.
+
+Historical packaging compatibility repair
+----------------------------------------
+The old full-study manifest can predate the ddd8004 output-path length repair.
+Baseline verification now accepts ONLY the exact reviewed70f795c->ddd8004 hashes
+of that package's README.txt, run_experiment.ps1 and test_runner.ps1, including
+their explicitly pinned LF/CRLF forms. The launcher diff only changes the default
+output path/error wording; the test diff only exercises that guard. No training,
+model, sampling or metric code changed in that reviewed repair. Arbitrary edits
+to these files still fail, as do ALL changes to unlisted sources or artifacts.
+The expected/current hashes and reasons are recorded in each seed's manifest at
+baseline_binding.source_verification; the historical manifest is never rewritten.
+This does not relax the new run's source freeze or data/weight/label hash checks.
+
+If the original51e5e40 attempt stopped at baseline_binding before PLAN VERIFIED,
+training has not begun and its new manifest has not been committed. Update and
+repeat the same command/root; no deletion or retraining is needed. The already
+written exclusion schedule is verified unchanged. If a previous exclusion run
+already has a frozen manifest, do not mix versions: use a NEW short OutputRoot.

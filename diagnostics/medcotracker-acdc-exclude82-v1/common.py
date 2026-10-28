@@ -19,6 +19,7 @@ sys.path[:0] = [str(APP / 'ext/co-tracker'), str(APP), str(APP / 'experiments'),
 import smoke as S
 from acdc_data import digest, read, save
 from exclusion import POLICY, make_schedule
+from source_provenance import verify_historical_sources
 
 ARMS = ('R1', 'B1')
 SEEDS = (0, 1, 2)
@@ -55,7 +56,7 @@ def baseline_binding(plan, baseline=Path('/baseline')):
                 'trackrad_ids', 'trackrad_files', 'student_config'):
         if old[key] != plan[key]:
             raise ValueError('Historical full study inputs differ: ' + key)
-    verify_files(CHECKOUT, old['source_sha256'])
+    source_verification = verify_historical_sources(CHECKOUT, old['source_sha256'], S.safe_file)
     receipt = read(baseline / 'full/external/B1/verified.json')
     if (receipt.get('complete') is not True or receipt.get('steps') != RULE['external_steps'] or
             receipt.get('manifest_sha256') != digest(baseline / 'manifest.json') or
@@ -69,7 +70,7 @@ def baseline_binding(plan, baseline=Path('/baseline')):
     records = read(baseline / 'full/external/B1/steps.json')
     if [r['step'] for r in records] != list(range(RULE['external_steps'])):
         raise ValueError('Historical external steps incomplete')
-    return {p: digest(baseline / p) for p in paths}
+    return {**{p: digest(baseline / p) for p in paths}, 'source_verification': source_verification}
 
 
 def baseline_steps(baseline=Path('/baseline')):

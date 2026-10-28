@@ -88,8 +88,14 @@ print(json.dumps({'rule': C.RULE, 'jobs': [E.schedule(i) for i in range(10)],
         args = (out, prior, audit, ext, weights, self.root / 'train-40', self.root / 'validation-10', images, pilot)
         schedule = {'replacement_steps': 1, 'rows': [{'original_patient': 'patient082', 'slot': 0}]}
         with patch.object(C.S, 'make_jobs'), patch('freeze_sidecar_reference.freeze', side_effect=lambda src, dst: C.save(dst, {'fixture': True})), \
-                patch.object(C, 'make_schedule', return_value=schedule), patch.object(C, 'baseline_binding', return_value={}), \
+                patch.object(C, 'make_schedule', return_value=schedule), \
+                patch.object(C, 'baseline_binding', side_effect=[ValueError('Artifact changed: historical README'), {}, {}]), \
                 patch.object(C, 'baseline_steps', return_value=[{'patient': 'patient082', 'slot': 0}]):
+            with self.assertRaisesRegex(ValueError, 'historical README'):
+                C.prepare(*args)
+            self.assertTrue((out / 'exclusion-schedule.json').is_file())
+            self.assertFalse((out / 'manifest.json').exists())
+            self.assertFalse((out / 'pretrained-frozen.pth').exists())
             C.prepare(*args)
             C.prepare(*args)
         manifest = C.checked_plan(out)
