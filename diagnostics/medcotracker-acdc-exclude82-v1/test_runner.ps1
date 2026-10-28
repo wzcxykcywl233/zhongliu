@@ -1,0 +1,135 @@
+param([string]$TempRoot='D:\yijian\tmp')
+$ErrorActionPreference='Stop'
+$RunnerPath=Join-Path $PSScriptRoot 'run_experiment.ps1'
+$ParseTokens=$null; $ParseErrors=$null
+$RunnerAst=[System.Management.Automation.Language.Parser]::ParseFile($RunnerPath,[ref]$ParseTokens,[ref]$ParseErrors)
+if ($ParseErrors.Count) { throw 'Runner has syntax errors.' }
+$DefaultOutput=@($RunnerAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'OutputRoot' })[0].DefaultValue.SafeGetValue()
+$OutputGuard=$RunnerAst.Find({param($Node)
+    $Node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $Node.Extent.Text.StartsWith('if ($OutputRoot.Length')
+},$true)
+if (-not $OutputGuard) { throw 'Output path guard missing.' }
+function Test-OutputPathGuard([string]$OutputRoot) {
+    $OutputRoot=[IO.Path]::GetFullPath($OutputRoot).TrimEnd('\')
+    & ([scriptblock]::Create($OutputGuard.Extent.Text))
+}
+# Exercise the real default/guard without creating or accessing C:\zhongliu.
+Test-OutputPathGuard $DefaultOutput
+if ((Join-Path $DefaultOutput 'seed_0').Length -gt 32) { throw 'Default seed path exceeds the designed budget.' }
+$Rejected=$false
+try { Test-OutputPathGuard 'C:\zhongliu\mct-b1-full-v1' } catch { $Rejected=$true }
+if (-not $Rejected) { throw 'Regression fixture: previous 26-character default must be rejected.' }
+$TestRoot=Join-Path $TempRoot ('f'+[Guid]::NewGuid().ToString('N').Substring(0,4))
+$RealRepo=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+foreach ($Part in @('repo\scripts','repo\training-checkpoints','prior','data','audit','external-smoke','pilot','baseline','train\T_001','val\V_001')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $TestRoot $Part) | Out-Null
+}
+Copy-Item -LiteralPath (Join-Path $RealRepo 'scripts\experiment_local_runtimes.ps1') -Destination (Join-Path $TestRoot 'repo\scripts\experiment_local_runtimes.ps1')
+$Eval=@'
+param($Repository,$Dataset,$Results,$Profiles,$ModelCheckpoint,[switch]$RequireDiagnostics,[switch]$FreezeImages,[switch]$UsePinnedImages,$ReferenceImagesPath,$SidecarRuntimeConfig)
+if (-not $UsePinnedImages -or -not $RequireDiagnostics -or $Dataset -notlike '*\val') { throw 'Wrong evaluation scope' }
+$global:TransferEvaluations.Add($ModelCheckpoint)
+'@
+[IO.File]::WriteAllText((Join-Path $TestRoot 'repo\scripts\run_hierarchical_followup_resumable.ps1'),$Eval)
+$Inventory=@{Source=@();Dataset=@(
+    @{Split='train-40';Case='T_001';File=(Join-Path $TestRoot 'train\T_001\image.mha')},
+    @{Split='validation-10';Case='V_001';File=(Join-Path $TestRoot 'val\V_001\image.mha')},
+    @{Split='test-38';Case='X_001';File='Z:\must-not-resolve\X_001\image.mha'})}
+[IO.File]::WriteAllText((Join-Path $TestRoot 'prior\frozen-study.json'),($Inventory | ConvertTo-Json -Depth 6))
+$global:TransferImage='sha256:'+('a'*64)
+[IO.File]::WriteAllText((Join-Path $TestRoot 'prior\local-runtime-images.json'),(@{Training=$global:TransferImage;Inference=$global:TransferImage;Evaluation=$global:TransferImage} | ConvertTo-Json))
+$global:TransferCalls=New-Object System.Collections.Generic.List[object]
+$global:TransferEvaluations=New-Object System.Collections.Generic.List[string]
+$global:TransferFail=$false
+$global:TestGateFail=$false
+$global:ReplacementFail=$false
+function docker {
+    $Call=@($args)
+    $global:TransferCalls.Add($Call)
+    $global:LASTEXITCODE=0
+    if ($Call[0] -eq 'image') { Write-Output $global:TransferImage; return }
+    if ($Call[0] -ne 'run') { throw 'Unexpected Docker action' }
+    if ($global:TestGateFail -and $Call -contains 'test-gate') {
+        $global:LASTEXITCODE=1; Write-Output 'MOCK TEST GATE FAIL'; return
+    }
+    if ($global:TransferFail -and $Call -contains 'inference-smoke' -and $Call -contains 'MCT_FULL_SEED=2') {
+        $global:LASTEXITCODE=1; Write-Output 'MOCK INFERENCE FAIL'; return
+    }
+    if ($global:ReplacementFail -and $Call -contains '--smoke' -and $Call -contains 'MCT_FULL_SEED=2') {
+        $global:LASTEXITCODE=1; Write-Output 'MOCK REPLACEMENT SMOKE FAIL'; return
+    }
+    Write-Output 'AUDIT MOCK WORKER'
+}
+$Parameters=@{RepoRoot=(Join-Path $TestRoot 'repo');PriorStudy=(Join-Path $TestRoot 'prior');
+    DataRoot=(Join-Path $TestRoot 'data');AuditRoot=(Join-Path $TestRoot 'audit');ExternalSmoke=(Join-Path $TestRoot 'external-smoke');
+    PilotRoot=(Join-Path $TestRoot 'pilot');BaselineRoot=(Join-Path $TestRoot 'baseline');OutputRoot=(Join-Path $TestRoot 'out')}
+& (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage all
+$Runs=@($global:TransferCalls | Where-Object { $_[0] -eq 'run' })
+$External=@($Runs | Where-Object { ($_ -join ' ') -match '/external.py' -and $_ -notcontains '--smoke' -and $_ -notcontains '--verify-smoke' })
+$ReplacementSmoke=@($Runs | Where-Object { ($_ -join ' ') -match '/external.py' -and $_ -contains '--smoke' })
+$Transfers=@($Runs | Where-Object { ($_ -join ' ') -match '/train_transfer.py' })
+if ($External.Count -ne 3 -or $ReplacementSmoke.Count -ne 3 -or $Transfers.Count -ne 12 -or $global:TransferEvaluations.Count -ne 7) { throw 'Wrong queue budgets/counts' }
+$SmokeIndex=-1; $FirstExternal=-1
+for ($i=0; $i -lt $Runs.Count; $i++) {
+    $Call=$Runs[$i]
+    if ($Call -contains 'inference-smoke' -or $Call -contains '--smoke') { $SmokeIndex=$i }
+    if ($FirstExternal -lt 0 -and ($Call -join ' ') -match '/external.py' -and $Call -notcontains '--smoke' -and $Call -notcontains '--verify-smoke') { $FirstExternal=$i }
+    foreach ($Token in @('--pull','never','--network','none')) { if ($Call -notcontains $Token) { throw 'Missing offline restriction' } }
+    if (($Call -join ' ') -match 'must-not-resolve|/datasets/test') { throw 'Test access' }
+    if (($Call -join ' ') -match 'baseline.*test-38') { throw 'Historical test results accessed during all' }
+    foreach ($Mount in @($Call | Where-Object { $_ -match 'target=/baseline' })) {
+        if ($Mount -notmatch ',readonly$') { throw 'Baseline must be read-only' }
+    }
+    if (($Call -join ' ') -match '/external.py' -and ($Call -join ' ') -match 'target=/data,|target=/datasets') { throw 'External phase has TrackRAD data' }
+    if (($Call -join ' ') -match '/train_transfer.py' -and ($Call -join ' ') -match 'target=/acdc|target=/datasets/validation') { throw 'Transfer phase has external/validation input' }
+}
+if ($SmokeIndex -lt 0 -or $FirstExternal -le $SmokeIndex) { throw 'Pilot started before smoke' }
+$global:TransferCalls.Clear(); $global:TransferEvaluations.Clear(); $global:TransferFail=$true
+$Failed=$false
+try { & (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage all } catch { $Failed=$true }
+if (-not $Failed -or @($global:TransferCalls | Where-Object { ($_ -join ' ') -match '/external.py' -and $_ -notcontains '--smoke' -and $_ -notcontains '--verify-smoke' }).Count -gt 0 -or $global:TransferEvaluations.Count) {
+    throw 'Smoke failure must prevent external pilot and evaluation'
+}
+
+$global:TransferCalls.Clear(); $global:TransferEvaluations.Clear(); $global:TransferFail=$false
+$global:ReplacementFail=$true
+$Failed=$false
+try { & (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage all } catch { $Failed=$true }
+if (-not $Failed -or $global:TransferEvaluations.Count -or
+    @($global:TransferCalls | Where-Object { ($_ -join ' ') -match '/external.py' -and $_ -notcontains '--smoke' -and $_ -notcontains '--verify-smoke' }).Count) {
+    throw 'Replacement-label smoke failure must prevent all full training'
+}
+$global:ReplacementFail=$false
+$global:TransferCalls.Clear(); $global:TransferEvaluations.Clear()
+& (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage validation
+if (@($global:TransferCalls | Where-Object { ($_ -join ' ') -match '/external.py|/train_transfer.py' }).Count -gt 0 -or $global:TransferEvaluations.Count -ne 7) {
+    throw 'Validation-only stage must not train'
+}
+$global:TransferCalls.Clear(); $global:TransferEvaluations.Clear(); $global:TestGateFail=$true
+$Message=''
+try { & (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage test } catch { $Message=$_.Exception.Message }
+if ($Message -notmatch 'MedCoTracker failed' -or
+    @($global:TransferCalls | Where-Object { ($_ -join ' ') -match 'target=/test-data|/external.py|/train_transfer.py' }).Count -gt 0 -or $global:TransferEvaluations.Count) {
+    throw 'Missing validation gate must stop BEFORE test path resolution, test mount or inference'
+}
+$global:TestGateFail=$false
+$EvalTest=$Eval.Replace("$" + "Dataset -notlike '*\val'", "$" + "Dataset -notlike '*\test'")
+[IO.File]::WriteAllText((Join-Path $TestRoot 'repo\scripts\run_hierarchical_followup_resumable.ps1'),$EvalTest)
+New-Item -ItemType Directory -Force -Path (Join-Path $TestRoot 'test\X_001') | Out-Null
+$Inventory.Dataset[2].File=Join-Path $TestRoot 'test\X_001\image.mha'
+[IO.File]::WriteAllText((Join-Path $TestRoot 'prior\frozen-study.json'),($Inventory | ConvertTo-Json -Depth 6))
+$global:TransferCalls.Clear(); $global:TransferEvaluations.Clear()
+& (Join-Path $PSScriptRoot 'run_experiment.ps1') @Parameters -Stage test
+if ($global:TransferEvaluations.Count -ne 7 -or
+    @($global:TransferCalls | Where-Object { ($_ -join ' ') -match '/external.py|/train_transfer.py' }).Count -gt 0) {
+    throw 'Explicit test must evaluate fixed 7 arms without training'
+}
+$TestRuns=@($global:TransferCalls | Where-Object { $_[0] -eq 'run' })
+$GateIndex=-1; $TestIndex=-1
+for ($i=0; $i -lt $TestRuns.Count; $i++) {
+    if ($TestRuns[$i] -contains 'test-gate') { $GateIndex=$i }
+    if (($TestRuns[$i] -join ' ') -match 'target=/test-data') { $TestIndex=$i }
+}
+if ($GateIndex -lt 0 -or $TestIndex -le $GateIndex) { throw 'Test mounted before gate' }
+Write-Host 'FULL POWERSHELL MOCK PASSED; no real Docker/GPU/network calls'
